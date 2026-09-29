@@ -56,4 +56,6 @@ The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
 ## License
 
-MIT. This project is independent and is not affiliated with or endorsed by Meta or Facebook.
+MIT License. Copyright (c) 2026 **3S Verse**. This license applies only to this repository; it does not automatically apply to other 3S Verse repositories.
+
+This project is independent and is not affiliated with or endorsed by Meta or Facebook.
