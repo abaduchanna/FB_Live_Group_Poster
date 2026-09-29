@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">FB Live Group Poster</string>
+    <string name="accessibility_description">Opens only the Facebook groups you save, fills your approved live-link message, and optionally presses Post. It does not read passwords or send data to a server.</string>
+</resources>
+
