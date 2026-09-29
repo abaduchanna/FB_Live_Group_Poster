@@ -7,8 +7,9 @@
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
         android:label="FB Live Group Poster"
+        android:roundIcon="@drawable/ic_launcher"
         android:supportsRtl="true"
-        android:theme="@style/AppTheme">
+        android:theme="@style/AppThemeLight">
 
         <activity
             android:name=".MainActivity"
@@ -39,4 +40,3 @@
         </service>
     </application>
 </manifest>
-

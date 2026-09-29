@@ -1,4 +1,4 @@
-# FB Live Group Poster (Android)
+# FB_Live_Group_Poster (Android)
 
 An open-source Android proof of concept that shares a Facebook Live link to a user-approved list of Facebook groups through the installed Facebook app.
 
@@ -12,6 +12,7 @@ An open-source Android proof of concept that shares a Facebook Live link to a us
 - Fill a configurable message plus the live link.
 - Default safer mode leaves the final **Post** tap to the user, detects that tap, and then advances after the configured delay.
 - Optional experimental mode taps **Post** and waits at least 45 seconds before the next group.
+- Facebook-blue light and dark themes with an in-app sun/moon switch.
 - All configuration stays on the phone; no Facebook password, cookie, or token is collected.
 
 ## Important limitation: live on the same phone
@@ -36,7 +37,7 @@ This project uses JDK 17, Android SDK 35, Android Gradle Plugin 8.7.3, and Gradl
 gradle assembleDebug
 ```
 
-The APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+The APK is written to `app/build/outputs/apk/debug/FB_Live_Group_Poster-debug.apk`.
 
 ## Safety and acceptable use
 

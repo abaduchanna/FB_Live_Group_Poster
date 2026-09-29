@@ -22,3 +22,6 @@ android {
     }
 }
 
+base {
+    archivesName.set("FB_Live_Group_Poster")
+}

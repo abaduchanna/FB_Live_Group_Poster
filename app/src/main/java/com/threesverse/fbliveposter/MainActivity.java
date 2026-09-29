@@ -12,6 +12,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.text.InputType;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -27,6 +29,12 @@ import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
     private static final Pattern FACEBOOK_URL = Pattern.compile("https?://(?:www\\.|m\\.)?facebook\\.com/\\S+", Pattern.CASE_INSENSITIVE);
+    private static final String KEY_DARK_THEME = "ui_dark_theme";
+    private static final int FB_BLUE = Color.rgb(24, 119, 242);
+    private static final int FB_LIGHT_BG = Color.rgb(240, 242, 245);
+    private static final int FB_DARK_BG = Color.rgb(24, 25, 26);
+    private static final int FB_LIGHT_TEXT = Color.rgb(5, 5, 5);
+    private static final int FB_DARK_TEXT = Color.rgb(228, 230, 235);
 
     private EditText linkInput;
     private EditText messageInput;
@@ -34,9 +42,12 @@ public class MainActivity extends Activity {
     private EditText delayInput;
     private CheckBox autoPostInput;
     private TextView status;
+    private boolean darkTheme;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        darkTheme = resolveDarkTheme();
+        setTheme(darkTheme ? R.style.AppThemeDark : R.style.AppThemeLight);
         super.onCreate(savedInstanceState);
         buildUi();
         loadSavedValues();
@@ -62,12 +73,21 @@ public class MainActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(20), dp(24), dp(20), dp(40));
+        root.setBackgroundColor(darkTheme ? FB_DARK_BG : FB_LIGHT_BG);
         scroll.addView(root);
 
         TextView title = text("FB Live Group Poster", 26, true);
-        title.setTextColor(Color.rgb(24, 119, 242));
+        title.setTextColor(FB_BLUE);
         root.addView(title);
         root.addView(text("Aap ke approved groups mein aap ka live link post karta hai. Facebook password kabhi nahi mangta.", 15, false));
+
+        Button themeToggle = button(darkTheme ? "☀️  Light theme" : "🌙  Dark theme");
+        themeToggle.setContentDescription(darkTheme ? "Switch to Facebook light theme" : "Switch to Facebook dark theme");
+        themeToggle.setOnClickListener(v -> {
+            CampaignStore.prefs(this).edit().putBoolean(KEY_DARK_THEME, !darkTheme).apply();
+            recreate();
+        });
+        root.addView(themeToggle);
 
         linkInput = input("Facebook live link", false);
         messageInput = input("Message, e.g. Main live hoon — join karein", true);
@@ -111,7 +131,7 @@ public class MainActivity extends Activity {
         root.addView(status);
 
         TextView warning = text("Important: sirf un groups mein post karein jahan promotion/live links allowed hon. Same phone par Facebook Live background mein jane se stream ruk sakti hai; doosra phone zyada reliable hai.", 13, false);
-        warning.setTextColor(Color.DKGRAY);
+        warning.setTextColor(darkTheme ? Color.rgb(176, 179, 184) : Color.rgb(101, 103, 107));
         warning.setPadding(0, dp(18), 0, 0);
         root.addView(warning);
 
@@ -212,6 +232,13 @@ public class MainActivity extends Activity {
         }
     }
 
+    private boolean resolveDarkTheme() {
+        SharedPreferences p = CampaignStore.prefs(this);
+        if (p.contains(KEY_DARK_THEME)) return p.getBoolean(KEY_DARK_THEME, false);
+        int nightMode = getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK;
+        return nightMode == Configuration.UI_MODE_NIGHT_YES;
+    }
+
     private TextView label(String value) {
         TextView view = text(value, 14, true);
         view.setPadding(0, dp(18), 0, dp(6));
@@ -222,6 +249,7 @@ public class MainActivity extends Activity {
         TextView view = new TextView(this);
         view.setText(value);
         view.setTextSize(size);
+        view.setTextColor(darkTheme ? FB_DARK_TEXT : FB_LIGHT_TEXT);
         if (bold) view.setTypeface(view.getTypeface(), android.graphics.Typeface.BOLD);
         return view;
     }
@@ -230,6 +258,9 @@ public class MainActivity extends Activity {
         EditText view = new EditText(this);
         view.setHint(hint);
         view.setTextSize(16);
+        view.setTextColor(darkTheme ? FB_DARK_TEXT : FB_LIGHT_TEXT);
+        view.setHintTextColor(darkTheme ? Color.rgb(176, 179, 184) : Color.rgb(101, 103, 107));
+        view.setBackgroundTintList(ColorStateList.valueOf(darkTheme ? Color.rgb(176, 179, 184) : FB_BLUE));
         view.setSingleLine(!multiline);
         if (multiline) view.setGravity(android.view.Gravity.TOP | android.view.Gravity.START);
         return view;
@@ -238,6 +269,8 @@ public class MainActivity extends Activity {
     private Button button(String value) {
         Button button = new Button(this);
         button.setText(value);
+        button.setTextColor(Color.WHITE);
+        button.setBackgroundTintList(ColorStateList.valueOf(FB_BLUE));
         LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
         params.topMargin = dp(12);
         button.setLayoutParams(params);

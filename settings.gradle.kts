@@ -14,6 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "FB Live Group Poster"
+rootProject.name = "FB_Live_Group_Poster"
 include(":app")
-
