@@ -20,6 +20,8 @@ import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -371,34 +373,54 @@ public class MainActivity extends Activity {
             return;
         }
 
-        String[] labels = new String[packages.size()];
-        for (int i = 0; i < packages.size(); i++) labels[i] = facebookLabel(packages.get(i));
-        final int[] selected = {-1};
+        // Framework setSingleChoiceItems() collapses/hides the list when setMessage()
+        // is also set on several OEM skins — so the app rows are built by hand and
+        // passed as a custom view. Renders identically on every device.
+        LinearLayout panel = new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        int pad = dp(20);
+        panel.setPadding(pad, dp(4), pad, dp(4));
+
+        TextView hint = text("Facebook, Facebook Lite ya clone — har campaign se pehle aap choose karte hain. App kabhi khud select nahi karti.", 14, false);
+        hint.setPadding(0, 0, 0, dp(8));
+        panel.addView(hint);
+
+        RadioGroup group = new RadioGroup(this);
+        group.setOrientation(LinearLayout.VERTICAL);
+        for (int i = 0; i < packages.size(); i++) {
+            RadioButton row = new RadioButton(this);
+            row.setId(i + 1); // 0 means "nothing checked"
+            row.setText(facebookLabel(packages.get(i)));
+            row.setTextSize(16);
+            row.setTextColor(darkTheme ? FB_DARK_TEXT : FB_LIGHT_TEXT);
+            row.setPadding(dp(6), dp(10), dp(6), dp(10));
+            group.addView(row);
+        }
+        panel.addView(group);
+
         AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Kaunsi Facebook app use karni hai?")
-                .setMessage("Facebook, Facebook Lite ya clone — har campaign se pehle aap choose karte hain. App kabhi khud select nahi karti.")
-                .setSingleChoiceItems(labels, -1, (d, which) -> {
-                    selected[0] = which;
-                    ((AlertDialog) d).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
-                })
+                .setView(panel)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton(forImport ? "Import in selected" : "Use selected", null)
                 .create();
         dialog.setOnShowListener(ignored -> {
-            Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            final Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
             confirm.setEnabled(false);
             confirm.setOnClickListener(v -> {
-                if (selected[0] < 0) return;
-                String packageName = packages.get(selected[0]);
+                int chosen = group.getCheckedRadioButtonId() - 1;
+                if (chosen < 0 || chosen >= packages.size()) return;
                 dialog.dismiss();
                 if (forImport) {
-                    beginImport(packageName);
+                    beginImport(packages.get(chosen));
                 } else {
-                    startCampaign(delay, packageName);
+                    startCampaign(delay, packages.get(chosen));
                 }
             });
         });
         dialog.show();
+        group.setOnCheckedChangeListener((g, checkedId) ->
+                dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true));
     }
 
     /** Finds every installed Facebook-family app: official, Lite and clones/mods. */
