@@ -6,6 +6,5 @@
     android:canPerformGestures="false"
     android:canRetrieveWindowContent="true"
     android:description="@string/accessibility_description"
-    android:notificationTimeout="250"
-    android:packageNames="com.facebook.katana,com.facebook.lite" />
+    android:notificationTimeout="250" />
 

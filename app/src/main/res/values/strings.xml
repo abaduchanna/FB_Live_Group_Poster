@@ -1,5 +1,5 @@
 <resources>
     <string name="app_name">FB Live Group Poster</string>
-    <string name="accessibility_description">Opens only the Facebook groups you save, fills your approved live-link message, and optionally presses Post. It does not read passwords or send data to a server.</string>
+    <string name="accessibility_description">Imports the groups visible in your Facebook app, opens only the groups you select, fills your approved live-link message, and optionally presses Post. It works with Facebook, Facebook Lite and Facebook clones chosen by you. It does not read passwords or send data to a server.</string>
 </resources>
 

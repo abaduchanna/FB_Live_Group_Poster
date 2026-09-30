@@ -6,8 +6,8 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Color;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
@@ -17,14 +17,19 @@ import android.content.res.Configuration;
 import android.view.View;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.CompoundButton;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.util.List;
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -36,15 +41,24 @@ public class MainActivity extends Activity {
     private static final int FB_DARK_BG = Color.rgb(24, 25, 26);
     private static final int FB_LIGHT_TEXT = Color.rgb(5, 5, 5);
     private static final int FB_DARK_TEXT = Color.rgb(228, 230, 235);
+    /** Facebook apps that are not for posting — excluded from the chooser. */
+    private static final List<String> EXCLUDED_PACKAGES = java.util.Arrays.asList(
+            "com.facebook.orca", "com.facebook.mlite", "com.facebook.services",
+            "com.facebook.appmanager", "com.facebook.system", "com.facebook.katana.proxy"
+    );
 
     private EditText linkInput;
     private EditText messageInput;
-    private EditText groupsInput;
     private EditText delayInput;
     private CheckBox autoPostInput;
+    private CheckBox selectAllBox;
     private TextView status;
     private TextView facebookAppStatus;
+    private TextView selectionCount;
+    private LinearLayout groupListBox;
+    private Button startButton;
     private boolean darkTheme;
+    private boolean syncingUi;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -67,6 +81,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        mergeImportResult();
+        rebuildGroupList();
         refreshStatus();
     }
 
@@ -81,9 +97,9 @@ public class MainActivity extends Activity {
         TextView title = text("FB Live Group Poster", 26, true);
         title.setTextColor(FB_BLUE);
         root.addView(title);
-        root.addView(text("Aap ke approved groups mein aap ka live link post karta hai. Facebook password kabhi nahi mangta.", 15, false));
+        root.addView(text("Facebook se apni groups list import karein, groups select karein, aur selected groups par live link auto-post karein. Facebook password kabhi nahi mangta.", 15, false));
 
-        Button themeToggle = button(darkTheme ? "☀️  Light theme" : "🌙  Dark theme");
+        Button themeToggle = button(darkTheme ? "Light theme" : "Dark theme");
         themeToggle.setContentDescription(darkTheme ? "Switch to Facebook light theme" : "Switch to Facebook dark theme");
         themeToggle.setOnClickListener(v -> {
             CampaignStore.prefs(this).edit().putBoolean(KEY_DARK_THEME, !darkTheme).apply();
@@ -95,24 +111,65 @@ public class MainActivity extends Activity {
         facebookAppStatus.setPadding(0, dp(12), 0, 0);
         root.addView(facebookAppStatus);
 
+        root.addView(label("1. Live link"));
         linkInput = input("Facebook live link", false);
-        messageInput = input("Message, e.g. Main live hoon — join karein", true);
-        groupsInput = input("Group URLs — har line par aik", true);
-        groupsInput.setMinLines(5);
+        root.addView(linkInput);
+
+        root.addView(label("2. Message (khaali chhoda to sirf live link post hoga)"));
+        messageInput = input("Message — optional", true);
+        root.addView(messageInput);
+
+        root.addView(label("3. Groups — Facebook se import karein, phir select karein"));
+        Button importButton = button("Import groups from Facebook");
+        importButton.setOnClickListener(v -> startImport());
+        root.addView(importButton);
+
+        LinearLayout selectionRow = new LinearLayout(this);
+        selectionRow.setOrientation(LinearLayout.HORIZONTAL);
+        selectionRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        selectionRow.setPadding(0, dp(8), 0, dp(4));
+        selectAllBox = new CheckBox(this);
+        selectAllBox.setText("Select all");
+        selectAllBox.setTextSize(15);
+        selectAllBox.setTextColor(darkTheme ? FB_DARK_TEXT : FB_LIGHT_TEXT);
+        selectAllBox.setOnCheckedChangeListener(this::onSelectAllChanged);
+        selectionRow.addView(selectAllBox);
+        selectionCount = text("", 13, false);
+        selectionCount.setPadding(dp(12), 0, 0, 0);
+        selectionRow.addView(selectionCount);
+        root.addView(selectionRow);
+
+        ScrollView groupScroll = new ScrollView(this);
+        groupListBox = new LinearLayout(this);
+        groupListBox.setOrientation(LinearLayout.VERTICAL);
+        groupListBox.setBackgroundColor(darkTheme ? Color.rgb(30, 31, 34) : Color.WHITE);
+        groupListBox.setPadding(dp(10), dp(6), dp(10), dp(6));
+        groupScroll.addView(groupListBox);
+        root.addView(groupScroll);
+
+        LinearLayout listButtons = new LinearLayout(this);
+        listButtons.setOrientation(LinearLayout.HORIZONTAL);
+        Button manualButton = button("Add manual group URLs");
+        manualButton.setOnClickListener(v -> showManualUrlDialog());
+        LinearLayout.LayoutParams halfLeft = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        halfLeft.setMargins(0, dp(8), dp(4), 0);
+        manualButton.setLayoutParams(halfLeft);
+        listButtons.addView(manualButton);
+        Button clearButton = button("Clear list");
+        clearButton.setOnClickListener(v -> confirmClearList());
+        LinearLayout.LayoutParams halfRight = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        halfRight.setMargins(dp(4), dp(8), 0, 0);
+        clearButton.setLayoutParams(halfRight);
+        root.addView(listButtons);
+
+        root.addView(label("4. Safety delay"));
         delayInput = input("Delay between groups (seconds)", false);
         delayInput.setInputType(InputType.TYPE_CLASS_NUMBER);
-
-        root.addView(label("1. Live link"));
-        root.addView(linkInput);
-        root.addView(label("2. Message"));
-        root.addView(messageInput);
-        root.addView(label("3. Facebook group links (manual approved list)"));
-        root.addView(groupsInput);
-        root.addView(label("4. Safety delay"));
         root.addView(delayInput);
 
         autoPostInput = new CheckBox(this);
         autoPostInput.setText("Post button automatically press kare (experimental)");
+        autoPostInput.setTextColor(darkTheme ? FB_DARK_TEXT : FB_LIGHT_TEXT);
         autoPostInput.setPadding(0, dp(10), 0, dp(10));
         root.addView(autoPostInput);
 
@@ -120,9 +177,9 @@ public class MainActivity extends Activity {
         accessibility.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
         root.addView(accessibility);
 
-        Button start = button("Start posting");
-        start.setOnClickListener(v -> validateAndConfirm());
-        root.addView(start);
+        startButton = button("Auto post to selected groups (0)");
+        startButton.setOnClickListener(v -> validateAndConfirm());
+        root.addView(startButton);
 
         Button stop = button("Stop campaign");
         stop.setOnClickListener(v -> {
@@ -136,7 +193,7 @@ public class MainActivity extends Activity {
         status.setPadding(0, dp(18), 0, 0);
         root.addView(status);
 
-        TextView warning = text("Important: sirf un groups mein post karein jahan promotion/live links allowed hon. Same phone par Facebook Live background mein jane se stream ruk sakti hai; doosra phone zyada reliable hai.", 13, false);
+        TextView warning = text("Important: import aap ke Facebook account ki visible groups dikhata hai — jo group aap me shamil nahi usay uncheck karein. Sirf un groups mein post karein jahan promotion/live links allowed hon. Same phone par Facebook Live background mein jane se stream ruk sakti hai; doosra phone zyada reliable hai.", 13, false);
         warning.setTextColor(darkTheme ? Color.rgb(176, 179, 184) : Color.rgb(101, 103, 107));
         warning.setPadding(0, dp(18), 0, 0);
         root.addView(warning);
@@ -147,19 +204,260 @@ public class MainActivity extends Activity {
     private void loadSavedValues() {
         SharedPreferences p = CampaignStore.prefs(this);
         linkInput.setText(p.getString(CampaignStore.KEY_LINK, ""));
-        messageInput.setText(p.getString(CampaignStore.KEY_MESSAGE, "Main Facebook par live hoon — join karein:"));
-        groupsInput.setText(p.getString(CampaignStore.KEY_GROUPS, ""));
+        messageInput.setText(""); // message is always empty by default
         delayInput.setText(String.valueOf(p.getInt(CampaignStore.KEY_DELAY, 90)));
         autoPostInput.setChecked(p.getBoolean(CampaignStore.KEY_AUTO_POST, false));
         String savedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
         if (!savedPackage.isEmpty()) {
-            facebookAppStatus.setText("Last used: " + facebookLabel(savedPackage) + " — Start par dobara confirm hogi");
+            facebookAppStatus.setText("Last used: " + facebookLabel(savedPackage) + " — Start par dobara choose hogi");
         }
     }
 
+    // ================= GROUP LIST UI =================
+
+    private void rebuildGroupList() {
+        if (groupListBox == null) return;
+        syncingUi = true;
+        JSONArray targets = CampaignStore.loadTargets(this);
+        groupListBox.removeAllViews();
+
+        if (targets.length() == 0) {
+            TextView empty = text("Abhi koi group nahi hai. Pehle \"Import groups from Facebook\" dabayein ya manual URLs add karein.", 13, false);
+            empty.setPadding(0, dp(8), 0, dp(8));
+            groupListBox.addView(empty);
+            selectAllBox.setEnabled(false);
+            selectAllBox.setChecked(false);
+            syncGroupScrollHeight(1);
+            updateSelectionUi();
+            syncingUi = false;
+            return;
+        }
+
+        int checkedCount = 0;
+        for (int i = 0; i < targets.length(); i++) {
+            JSONObject t = targets.optJSONObject(i);
+            if (t == null) continue;
+            boolean selected = t.optBoolean("s", false);
+            if (selected) checkedCount++;
+            CheckBox row = new CheckBox(this);
+            boolean isUrl = CampaignStore.TYPE_URL.equals(t.optString("t", CampaignStore.TYPE_NAME));
+            String value = t.optString("v", "");
+            row.setText(isUrl ? compactUrl(value) : value);
+            row.setTextSize(14);
+            row.setTextColor(darkTheme ? FB_DARK_TEXT : FB_LIGHT_TEXT);
+            row.setChecked(selected);
+            final JSONObject target = t;
+            row.setOnCheckedChangeListener((buttonView, isChecked) -> {
+                JSONArray all = CampaignStore.loadTargets(this);
+                for (int j = 0; j < all.length(); j++) {
+                    JSONObject item = all.optJSONObject(j);
+                    if (item != null && item.optString("t", "").equals(target.optString("t", ""))
+                            && item.optString("v", "").equalsIgnoreCase(target.optString("v", ""))) {
+                        try {
+                            item.put("s", isChecked);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                }
+                CampaignStore.saveTargets(this, all);
+                updateSelectionUi();
+            });
+            groupListBox.addView(row);
+        }
+
+        selectAllBox.setEnabled(true);
+        selectAllBox.setChecked(checkedCount == targets.length() && targets.length() > 0);
+        syncGroupScrollHeight(targets.length());
+        updateSelectionUi();
+        syncingUi = false;
+    }
+
+    private void onSelectAllChanged(CompoundButton buttonView, boolean isChecked) {
+        if (syncingUi) return;
+        JSONArray all = CampaignStore.loadTargets(this);
+        for (int i = 0; i < all.length(); i++) {
+            JSONObject t = all.optJSONObject(i);
+            if (t != null) {
+                try {
+                    t.put("s", isChecked);
+                } catch (Exception ignored) {
+                }
+            }
+        }
+        CampaignStore.saveTargets(this, all);
+        rebuildGroupList();
+    }
+
+    private void updateSelectionUi() {
+        JSONArray all = CampaignStore.loadTargets(this);
+        int total = all.length();
+        int selected = 0;
+        for (int i = 0; i < total; i++) {
+            JSONObject t = all.optJSONObject(i);
+            if (t != null && t.optBoolean("s", false)) selected++;
+        }
+        selectionCount.setText(selected + " of " + total + " selected");
+        startButton.setText("Auto post to selected groups (" + selected + ")");
+    }
+
+    private void syncGroupScrollHeight(int rows) {
+        int maxHeight = dp(320);
+        int height = Math.min(rows * dp(44) + dp(12), maxHeight);
+        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, height);
+        ((ScrollView) groupListBox.getParent()).setLayoutParams(params);
+    }
+
+    private void mergeImportResult() {
+        List<String> names = CampaignStore.takeImportResult(this);
+        if (names.isEmpty()) return;
+        List<String[]> pairs = new ArrayList<>();
+        for (String name : names) pairs.add(new String[]{CampaignStore.TYPE_NAME, name});
+        int added = CampaignStore.mergeTargets(this, pairs);
+        Toast.makeText(this, added + " nayi groups import ho gayin — ab select karein", Toast.LENGTH_LONG).show();
+    }
+
+    private void showManualUrlDialog() {
+        final EditText input = new EditText(this);
+        input.setHint("https://www.facebook.com/groups/...\n(har line par aik URL)");
+        input.setTextSize(14);
+        input.setInputType(InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        input.setMinLines(4);
+
+        new AlertDialog.Builder(this)
+                .setTitle("Manual group URLs")
+                .setMessage("Facebook URL wale groups bhi list mein add ho jayenge (import ki groups ke sath).")
+                .setView(input)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Add", (dialog, which) -> {
+                    List<String[]> pairs = new ArrayList<>();
+                    for (String url : CampaignStore.parseGroups(input.getText().toString())) {
+                        pairs.add(new String[]{CampaignStore.TYPE_URL, url});
+                    }
+                    int added = CampaignStore.mergeTargets(this, pairs);
+                    Toast.makeText(this, added + " URLs add huin", Toast.LENGTH_SHORT).show();
+                    rebuildGroupList();
+                })
+                .show();
+    }
+
+    private void confirmClearList() {
+        new AlertDialog.Builder(this)
+                .setTitle("Clear group list?")
+                .setMessage("Imported aur manual dono lists hat jayengi.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Clear", (dialog, which) -> {
+                    CampaignStore.saveTargets(this, new JSONArray());
+                    rebuildGroupList();
+                })
+                .show();
+    }
+
+    // ================= FACEBOOK APP CHOOSER =================
+
+    private void startImport() {
+        if (!PosterAccessibilityService.isEnabled(this)) {
+            Toast.makeText(this, "Pehle Accessibility service enable karein", Toast.LENGTH_LONG).show();
+            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            return;
+        }
+        chooseFacebookApp(true, 0);
+    }
+
+    private void chooseFacebookApp(final boolean forImport, final int delay) {
+        List<String> packages = installedFacebookPackages();
+        if (packages.isEmpty()) {
+            Toast.makeText(this, "Facebook app install aur login karein — Facebook, Facebook Lite ya clone, sab chalenge", Toast.LENGTH_LONG).show();
+            return;
+        }
+
+        String[] labels = new String[packages.size()];
+        for (int i = 0; i < packages.size(); i++) labels[i] = facebookLabel(packages.get(i));
+        final int[] selected = {-1};
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Kaunsi Facebook app use karni hai?")
+                .setMessage("Facebook, Facebook Lite ya clone — har campaign se pehle aap choose karte hain. App kabhi khud select nahi karti.")
+                .setSingleChoiceItems(labels, -1, (d, which) -> {
+                    selected[0] = which;
+                    ((AlertDialog) d).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                })
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton(forImport ? "Import in selected" : "Use selected", null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            confirm.setEnabled(false);
+            confirm.setOnClickListener(v -> {
+                if (selected[0] < 0) return;
+                String packageName = packages.get(selected[0]);
+                dialog.dismiss();
+                if (forImport) {
+                    beginImport(packageName);
+                } else {
+                    startCampaign(delay, packageName);
+                }
+            });
+        });
+        dialog.show();
+    }
+
+    /** Finds every installed Facebook-family app: official, Lite and clones/mods. */
+    private List<String> installedFacebookPackages() {
+        LinkedHashSet<String> found = new LinkedHashSet<>();
+        Intent main = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
+        List<ResolveInfo> launchables = getPackageManager().queryIntentActivities(main, 0);
+        for (ResolveInfo info : launchables) {
+            if (info == null || info.activityInfo == null) continue;
+            String pkg = info.activityInfo.packageName;
+            if (pkg == null || pkg.equals(getPackageName())) continue;
+            if (EXCLUDED_PACKAGES.contains(pkg)) continue;
+            String label;
+            try {
+                label = String.valueOf(info.loadLabel(getPackageManager()));
+            } catch (Exception broken) {
+                label = "";
+            }
+            String pkgLow = pkg.toLowerCase();
+            String labelLow = label.toLowerCase();
+            boolean isFacebookFamily = pkgLow.contains("facebook")
+                    || pkgLow.startsWith("com.fb")
+                    || labelLow.contains("facebook");
+            if (isFacebookFamily) found.add(pkg);
+        }
+        // Make sure the official apps are always considered, in a stable order.
+        List<String> result = new ArrayList<>();
+        for (String known : new String[]{"com.facebook.katana", "com.facebook.lite"}) {
+            try {
+                getPackageManager().getApplicationInfo(known, 0);
+                result.add(known);
+            } catch (PackageManager.NameNotFoundException ignored) {
+                // Not installed.
+            }
+        }
+        for (String pkg : found) {
+            if (!result.contains(pkg)) result.add(pkg);
+        }
+        return result;
+    }
+
+    private String facebookLabel(String packageName) {
+        if ("com.facebook.katana".equals(packageName)) return "Facebook";
+        if ("com.facebook.lite".equals(packageName)) return "Facebook Lite";
+        try {
+            CharSequence label = getPackageManager().getApplicationLabel(
+                    getPackageManager().getApplicationInfo(packageName, 0));
+            if (label != null && label.length() > 0) return label.toString();
+        } catch (PackageManager.NameNotFoundException ignored) {
+            // Fall through to raw package name.
+        }
+        return packageName;
+    }
+
+    // ================= CAMPAIGN =================
+
     private void validateAndConfirm() {
         String link = linkInput.getText().toString().trim();
-        List<String> groups = CampaignStore.parseGroups(groupsInput.getText().toString());
+        List<JSONObject> selected = CampaignStore.selectedTargets(this);
         int delay;
         try {
             delay = Integer.parseInt(delayInput.getText().toString().trim());
@@ -171,8 +469,8 @@ public class MainActivity extends Activity {
             linkInput.setError("Valid Facebook link paste karein");
             return;
         }
-        if (groups.isEmpty()) {
-            groupsInput.setError("Kam az kam aik valid facebook.com/groups/... link dein");
+        if (selected.isEmpty()) {
+            Toast.makeText(this, "Pehle groups import karein aur kam az kam aik select karein", Toast.LENGTH_LONG).show();
             return;
         }
         if (delay < 45) {
@@ -185,65 +483,40 @@ public class MainActivity extends Activity {
                 ? "App composer fill karke Post bhi press karegi."
                 : "App composer fill karegi; Post aap khud press karenge.";
         new AlertDialog.Builder(this)
-                .setTitle("Start for " + groups.size() + " groups?")
+                .setTitle("Start for " + selected.size() + " groups?")
                 .setMessage(mode + "\n\nGroup rules aur Facebook restrictions ki zimmedari user ki hai.")
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Continue", (dialog, which) -> chooseFacebookAppThenStart(safeDelay))
+                .setPositiveButton("Continue", (dialog, which) -> chooseFacebookApp(false, safeDelay))
                 .show();
     }
 
-    private void chooseFacebookAppThenStart(int delay) {
-        List<String> packages = installedFacebookPackages();
-        if (packages.isEmpty()) {
-            Toast.makeText(this, "Facebook ya Facebook Lite install aur login karein", Toast.LENGTH_LONG).show();
+    private void beginImport(String packageName) {
+        SharedPreferences p = CampaignStore.prefs(this);
+        p.edit()
+                .putBoolean(CampaignStore.KEY_IMPORT_MODE, true)
+                .putBoolean(CampaignStore.KEY_RUNNING, false)
+                .putString(CampaignStore.KEY_FACEBOOK_PACKAGE, packageName)
+                .putString(CampaignStore.KEY_STAGE, CampaignStore.STAGE_NAV_GROUPS)
+                .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                .putLong(CampaignStore.KEY_LAST_ACTION, System.currentTimeMillis())
+                .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
+                .apply();
+
+        facebookAppStatus.setText("Import app: " + facebookLabel(packageName));
+        Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
+        if (launch == null) {
+            CampaignStore.stop(this);
+            Toast.makeText(this, "Selected Facebook app launch nahi hui", Toast.LENGTH_LONG).show();
             return;
         }
-        if (packages.size() == 1) {
-            startCampaign(delay, packages.get(0));
-            return;
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        try {
+            startActivity(launch);
+            Toast.makeText(this, "Facebook me Groups screen par jayein aur rukein — scanning khud hogi. Khatam hone par is app par wapas aayen.", Toast.LENGTH_LONG).show();
+        } catch (Exception failed) {
+            CampaignStore.stop(this);
+            Toast.makeText(this, "Facebook app launch fail — dobara koshish karein", Toast.LENGTH_LONG).show();
         }
-
-        String[] labels = new String[packages.size()];
-        for (int i = 0; i < packages.size(); i++) labels[i] = facebookLabel(packages.get(i));
-        final int[] selected = {-1};
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Kaunsi Facebook app use karni hai?")
-                .setMessage("App auto-select nahi karegi. Har campaign ke liye aap choose karein.")
-                .setSingleChoiceItems(labels, -1, (d, which) -> {
-                    selected[0] = which;
-                    ((AlertDialog) d).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
-                })
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Use selected", null)
-                .create();
-        dialog.setOnShowListener(ignored -> {
-            Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            confirm.setEnabled(false);
-            confirm.setOnClickListener(v -> {
-                if (selected[0] < 0) return;
-                String packageName = packages.get(selected[0]);
-                dialog.dismiss();
-                startCampaign(delay, packageName);
-            });
-        });
-        dialog.show();
-    }
-
-    private List<String> installedFacebookPackages() {
-        List<String> result = new ArrayList<>();
-        for (String packageName : new String[]{"com.facebook.katana", "com.facebook.lite"}) {
-            try {
-                getPackageManager().getApplicationInfo(packageName, 0);
-                result.add(packageName);
-            } catch (PackageManager.NameNotFoundException ignored) {
-                // Not installed.
-            }
-        }
-        return result;
-    }
-
-    private String facebookLabel(String packageName) {
-        return "com.facebook.lite".equals(packageName) ? "Facebook Lite" : "Facebook";
     }
 
     private void startCampaign(int delay, String facebookPackage) {
@@ -251,14 +524,17 @@ public class MainActivity extends Activity {
         CampaignStore.prefs(this).edit()
                 .putString(CampaignStore.KEY_LINK, linkInput.getText().toString().trim())
                 .putString(CampaignStore.KEY_MESSAGE, messageInput.getText().toString().trim())
-                .putString(CampaignStore.KEY_GROUPS, groupsInput.getText().toString().trim())
+                .putString(CampaignStore.KEY_GROUPS, "") // legacy field no longer used
                 .putInt(CampaignStore.KEY_DELAY, delay)
                 .putBoolean(CampaignStore.KEY_AUTO_POST, autoPostInput.isChecked())
+                .putBoolean(CampaignStore.KEY_IMPORT_MODE, false)
                 .putString(CampaignStore.KEY_FACEBOOK_PACKAGE, facebookPackage)
                 .putBoolean(CampaignStore.KEY_RUNNING, true)
                 .putInt(CampaignStore.KEY_INDEX, 0)
                 .putString(CampaignStore.KEY_STAGE, CampaignStore.STAGE_OPEN_GROUP)
                 .putLong(CampaignStore.KEY_LAST_ACTION, now)
+                .putLong(CampaignStore.KEY_STAGE_SINCE, now)
+                .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
                 .apply();
 
         facebookAppStatus.setText("Facebook app: " + facebookLabel(facebookPackage));
@@ -288,9 +564,20 @@ public class MainActivity extends Activity {
         if (status == null) return;
         SharedPreferences p = CampaignStore.prefs(this);
         boolean running = p.getBoolean(CampaignStore.KEY_RUNNING, false);
+        boolean importing = p.getBoolean(CampaignStore.KEY_IMPORT_MODE, false);
+        if (importing) {
+            status.setText("Status: Facebook se groups scan ho rahi hain…");
+            return;
+        }
         int index = p.getInt(CampaignStore.KEY_INDEX, 0);
-        int total = CampaignStore.parseGroups(p.getString(CampaignStore.KEY_GROUPS, "")).size();
-        status.setText(running ? "Running: group " + Math.min(index + 1, total) + " of " + total : "Status: stopped / ready");
+        int total = CampaignStore.selectedTargets(this).size();
+        status.setText(running
+                ? "Running: group " + Math.min(index + 1, total) + " of " + total
+                : "Status: stopped / ready");
+    }
+
+    private String compactUrl(String url) {
+        return url.replaceFirst("^https?://(www\\.|m\\.)?", "");
     }
 
     private void requestNotificationsIfNeeded() {
