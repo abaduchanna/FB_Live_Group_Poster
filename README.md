@@ -9,11 +9,16 @@ An open-source Android proof of concept that shares a Facebook Live link to a us
 - Paste a live link, or share a Facebook link to the app from another phone/app.
 - Save Facebook group URLs, one per line.
 - Open each approved group sequentially in Facebook or Facebook Lite.
+- Detect installed Facebook/Facebook Lite apps. If both are installed, the user must choose one for that campaign; the app never silently picks one.
 - Fill a configurable message plus the live link.
 - Default safer mode leaves the final **Post** tap to the user, detects that tap, and then advances after the configured delay.
 - Optional experimental mode taps **Post** and waits at least 45 seconds before the next group.
 - Facebook-blue light and dark themes with an in-app sun/moon switch.
 - All configuration stays on the phone; no Facebook password, cookie, or token is collected.
+
+## Why groups are entered manually
+
+Meta removed the Facebook Groups API, including `publish_to_groups`, in April 2024. Android also prevents one app from reading another app's private account/session data. The app therefore cannot officially import every group joined by the signed-in Facebook account. Group URLs remain a user-approved manual list; this avoids pretending that unsupported private-data access is available.
 
 ## Important limitation: live on the same phone
 

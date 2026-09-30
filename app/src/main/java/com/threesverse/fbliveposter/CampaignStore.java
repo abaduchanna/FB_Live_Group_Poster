@@ -13,6 +13,7 @@ final class CampaignStore {
     static final String KEY_GROUPS = "groups";
     static final String KEY_DELAY = "delay_seconds";
     static final String KEY_AUTO_POST = "auto_post";
+    static final String KEY_FACEBOOK_PACKAGE = "facebook_package";
     static final String KEY_RUNNING = "running";
     static final String KEY_INDEX = "group_index";
     static final String KEY_STAGE = "stage";
@@ -60,4 +61,3 @@ final class CampaignStore {
                 .apply();
     }
 }
-

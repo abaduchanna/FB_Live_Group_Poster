@@ -24,6 +24,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.List;
+import java.util.ArrayList;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -42,6 +43,7 @@ public class MainActivity extends Activity {
     private EditText delayInput;
     private CheckBox autoPostInput;
     private TextView status;
+    private TextView facebookAppStatus;
     private boolean darkTheme;
 
     @Override
@@ -89,6 +91,10 @@ public class MainActivity extends Activity {
         });
         root.addView(themeToggle);
 
+        facebookAppStatus = text("Facebook app: Start par choose hogi", 14, true);
+        facebookAppStatus.setPadding(0, dp(12), 0, 0);
+        root.addView(facebookAppStatus);
+
         linkInput = input("Facebook live link", false);
         messageInput = input("Message, e.g. Main live hoon — join karein", true);
         groupsInput = input("Group URLs — har line par aik", true);
@@ -100,7 +106,7 @@ public class MainActivity extends Activity {
         root.addView(linkInput);
         root.addView(label("2. Message"));
         root.addView(messageInput);
-        root.addView(label("3. Facebook group links"));
+        root.addView(label("3. Facebook group links (manual approved list)"));
         root.addView(groupsInput);
         root.addView(label("4. Safety delay"));
         root.addView(delayInput);
@@ -145,6 +151,10 @@ public class MainActivity extends Activity {
         groupsInput.setText(p.getString(CampaignStore.KEY_GROUPS, ""));
         delayInput.setText(String.valueOf(p.getInt(CampaignStore.KEY_DELAY, 90)));
         autoPostInput.setChecked(p.getBoolean(CampaignStore.KEY_AUTO_POST, false));
+        String savedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
+        if (!savedPackage.isEmpty()) {
+            facebookAppStatus.setText("Last used: " + facebookLabel(savedPackage) + " — Start par dobara confirm hogi");
+        }
     }
 
     private void validateAndConfirm() {
@@ -178,11 +188,65 @@ public class MainActivity extends Activity {
                 .setTitle("Start for " + groups.size() + " groups?")
                 .setMessage(mode + "\n\nGroup rules aur Facebook restrictions ki zimmedari user ki hai.")
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Start", (dialog, which) -> startCampaign(safeDelay))
+                .setPositiveButton("Continue", (dialog, which) -> chooseFacebookAppThenStart(safeDelay))
                 .show();
     }
 
-    private void startCampaign(int delay) {
+    private void chooseFacebookAppThenStart(int delay) {
+        List<String> packages = installedFacebookPackages();
+        if (packages.isEmpty()) {
+            Toast.makeText(this, "Facebook ya Facebook Lite install aur login karein", Toast.LENGTH_LONG).show();
+            return;
+        }
+        if (packages.size() == 1) {
+            startCampaign(delay, packages.get(0));
+            return;
+        }
+
+        String[] labels = new String[packages.size()];
+        for (int i = 0; i < packages.size(); i++) labels[i] = facebookLabel(packages.get(i));
+        final int[] selected = {-1};
+        AlertDialog dialog = new AlertDialog.Builder(this)
+                .setTitle("Kaunsi Facebook app use karni hai?")
+                .setMessage("App auto-select nahi karegi. Har campaign ke liye aap choose karein.")
+                .setSingleChoiceItems(labels, -1, (d, which) -> {
+                    selected[0] = which;
+                    ((AlertDialog) d).getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(true);
+                })
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Use selected", null)
+                .create();
+        dialog.setOnShowListener(ignored -> {
+            Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            confirm.setEnabled(false);
+            confirm.setOnClickListener(v -> {
+                if (selected[0] < 0) return;
+                String packageName = packages.get(selected[0]);
+                dialog.dismiss();
+                startCampaign(delay, packageName);
+            });
+        });
+        dialog.show();
+    }
+
+    private List<String> installedFacebookPackages() {
+        List<String> result = new ArrayList<>();
+        for (String packageName : new String[]{"com.facebook.katana", "com.facebook.lite"}) {
+            try {
+                getPackageManager().getApplicationInfo(packageName, 0);
+                result.add(packageName);
+            } catch (PackageManager.NameNotFoundException ignored) {
+                // Not installed.
+            }
+        }
+        return result;
+    }
+
+    private String facebookLabel(String packageName) {
+        return "com.facebook.lite".equals(packageName) ? "Facebook Lite" : "Facebook";
+    }
+
+    private void startCampaign(int delay, String facebookPackage) {
         long now = System.currentTimeMillis();
         CampaignStore.prefs(this).edit()
                 .putString(CampaignStore.KEY_LINK, linkInput.getText().toString().trim())
@@ -190,11 +254,14 @@ public class MainActivity extends Activity {
                 .putString(CampaignStore.KEY_GROUPS, groupsInput.getText().toString().trim())
                 .putInt(CampaignStore.KEY_DELAY, delay)
                 .putBoolean(CampaignStore.KEY_AUTO_POST, autoPostInput.isChecked())
+                .putString(CampaignStore.KEY_FACEBOOK_PACKAGE, facebookPackage)
                 .putBoolean(CampaignStore.KEY_RUNNING, true)
                 .putInt(CampaignStore.KEY_INDEX, 0)
                 .putString(CampaignStore.KEY_STAGE, CampaignStore.STAGE_OPEN_GROUP)
                 .putLong(CampaignStore.KEY_LAST_ACTION, now)
                 .apply();
+
+        facebookAppStatus.setText("Facebook app: " + facebookLabel(facebookPackage));
 
         if (!PosterAccessibilityService.isEnabled(this)) {
             CampaignStore.stop(this);

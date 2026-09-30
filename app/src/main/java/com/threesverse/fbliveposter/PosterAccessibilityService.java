@@ -143,17 +143,18 @@ public class PosterAccessibilityService extends AccessibilityService {
                 .apply();
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(group));
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        String selectedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
+        if (!FACEBOOK_PACKAGES.contains(selectedPackage)) {
+            CampaignStore.stop(context);
+            Toast.makeText(context, "Facebook app select nahi hui. Campaign dobara Start karein.", Toast.LENGTH_LONG).show();
+            return;
+        }
+        intent.setPackage(selectedPackage);
         try {
-            intent.setPackage("com.facebook.katana");
             context.startActivity(intent);
-        } catch (Exception mainMissing) {
-            try {
-                intent.setPackage("com.facebook.lite");
-                context.startActivity(intent);
-            } catch (Exception liteMissing) {
-                intent.setPackage(null);
-                context.startActivity(intent);
-            }
+        } catch (Exception missing) {
+            CampaignStore.stop(context);
+            Toast.makeText(context, "Selected Facebook app available nahi. Campaign stopped.", Toast.LENGTH_LONG).show();
         }
     }
 
