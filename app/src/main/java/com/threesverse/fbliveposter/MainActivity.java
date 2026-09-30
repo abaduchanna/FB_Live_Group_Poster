@@ -385,11 +385,14 @@ public class MainActivity extends Activity {
         hint.setPadding(0, 0, 0, dp(8));
         panel.addView(hint);
 
+        java.util.Map<Integer, Integer> idToIndex = new java.util.HashMap<>();
         RadioGroup group = new RadioGroup(this);
         group.setOrientation(LinearLayout.VERTICAL);
         for (int i = 0; i < packages.size(); i++) {
             RadioButton row = new RadioButton(this);
-            row.setId(i + 1); // 0 means "nothing checked"
+            int rowId = View.generateViewId();
+            row.setId(rowId);
+            idToIndex.put(rowId, i);
             row.setText(facebookLabel(packages.get(i)));
             row.setTextSize(16);
             row.setTextColor(darkTheme ? FB_DARK_TEXT : FB_LIGHT_TEXT);
@@ -408,8 +411,8 @@ public class MainActivity extends Activity {
             final Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
             confirm.setEnabled(false);
             confirm.setOnClickListener(v -> {
-                int chosen = group.getCheckedRadioButtonId() - 1;
-                if (chosen < 0 || chosen >= packages.size()) return;
+                Integer chosen = idToIndex.get(group.getCheckedRadioButtonId());
+                if (chosen == null) return;
                 dialog.dismiss();
                 if (forImport) {
                     beginImport(packages.get(chosen));
