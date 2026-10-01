@@ -33,11 +33,14 @@ public class PosterAccessibilityService extends AccessibilityService {
     private static final List<String> POST_LABELS = Arrays.asList("Post", "POST", "Publish");
     private static final List<String> GROUPS_LABELS = Arrays.asList("Groups");
     private static final List<String> MENU_LABELS = Arrays.asList("Menu");
+    private static final List<String> SEE_MORE_LABELS = Arrays.asList("See more", "See all");
     private static final List<String> YOUR_GROUPS_HINTS = Arrays.asList("Your groups", "Groups you manage");
     private static final Set<String> NOISE_LABELS = new HashSet<>(Arrays.asList(
             "home", "feed", "menu", "notifications", "search", "marketplace", "watch", "gaming",
             "reels", "video", "profile", "friends", "groups", "group", "events", "pages",
             "memories", "saved", "dating", "kids", "avatar", "create", "see more", "see all",
+            "see less", "back", "settings", "unpin group", "pin group", "your activity",
+            "manage", "more", "about", "view members", "invite friends", "notification",
             "write something", "what's on your mind", "your groups", "groups you manage",
             "suggested for you", "suggested", "settings & privacy", "help & support", "help",
             "log out", "dark mode", "messages", "chats", "shortcuts", "recent activity",
@@ -192,6 +195,14 @@ public class PosterAccessibilityService extends AccessibilityService {
         if (NOISE_LABELS.contains(low)) return false;
         if (low.contains("·") || low.contains("members") || low.contains("member ")) return false;
         if (low.startsWith("http") || low.contains("facebook.com") || low.contains("/groups/")) return false;
+        // Device-audit junk that slipped through before: Groups-screen tab
+        // counters ("For you, 1 of 5"), badge labels ("Settings, 91 new") and
+        // chrome/menu leftovers ("Back", "Unpin group"…) — none are group names.
+        if (low.matches(".*\\d+\\s+of\\s+\\d+.*")) return false;
+        if (low.matches(".*,\\s*\\d+\\s+new.*")) return false;
+        if (low.startsWith("back") || low.startsWith("settings")
+                || low.startsWith("unpin") || low.startsWith("your activity")
+                || low.startsWith("for you") || low.startsWith("your groups")) return false;
         if (low.matches(".*\\d{4,}.*")) return false; // ids, timestamps, big counts
         return true;
     }
@@ -310,11 +321,27 @@ public class PosterAccessibilityService extends AccessibilityService {
             p.edit().putInt(CampaignStore.KEY_SCAN_COUNT, 0).apply();
             return;
         }
+        // The Menu drawer collapses most shortcuts behind "See more" — expand it
+        // before hunting again, otherwise the Groups entry never becomes visible
+        // (device-audit fix: import used to open the drawer and stall to timeout).
+        AccessibilityNodeInfo seeMore = findByLabels(root, SEE_MORE_LABELS, true);
+        if (seeMore != null && stageTimedOutSince(p, 1500L) && clickNodeOrParent(seeMore)) {
+            p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+            return;
+        }
         // Groups entry not visible — open the Menu first (rate-limited so we do not double-tap).
         if (!stageTimedOutSince(p, 2500L)) return;
         AccessibilityNodeInfo menu = findByLabels(root, MENU_LABELS, true);
         if (menu != null && clickNodeOrParent(menu)) {
             p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+            return;
+        }
+        // Dead screen (drawer open twice, stray dialog…) — BACK resets the
+        // navigation so the next tick can tap Menu again instead of waiting
+        // out the whole stage timeout.
+        if (stageTimedOutSince(p, 12000L)) {
+            p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+            performGlobalAction(GLOBAL_ACTION_BACK);
         }
     }
 

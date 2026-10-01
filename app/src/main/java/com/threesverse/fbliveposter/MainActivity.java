@@ -141,13 +141,16 @@ public class MainActivity extends Activity {
         selectionRow.addView(selectionCount);
         root.addView(selectionRow);
 
-        ScrollView groupScroll = new ScrollView(this);
+        // NO inner ScrollView here: a scrollable box nested inside the page's
+        // own ScrollView never scrolls on real devices (the outer view eats the
+        // drag — with 136 imported groups the user could only ever see the
+        // first ~10). Rows render straight into the page scroll instead, so the
+        // whole list is reachable by scrolling the screen itself.
         groupListBox = new LinearLayout(this);
         groupListBox.setOrientation(LinearLayout.VERTICAL);
         groupListBox.setBackgroundColor(darkTheme ? Color.rgb(30, 31, 34) : Color.WHITE);
         groupListBox.setPadding(dp(10), dp(6), dp(10), dp(6));
-        groupScroll.addView(groupListBox);
-        root.addView(groupScroll);
+        root.addView(groupListBox);
 
         LinearLayout listButtons = new LinearLayout(this);
         listButtons.setOrientation(LinearLayout.HORIZONTAL);
@@ -229,7 +232,6 @@ public class MainActivity extends Activity {
             groupListBox.addView(empty);
             selectAllBox.setEnabled(false);
             selectAllBox.setChecked(false);
-            syncGroupScrollHeight(1);
             updateSelectionUi();
             syncingUi = false;
             return;
@@ -269,7 +271,6 @@ public class MainActivity extends Activity {
 
         selectAllBox.setEnabled(true);
         selectAllBox.setChecked(checkedCount == targets.length() && targets.length() > 0);
-        syncGroupScrollHeight(targets.length());
         updateSelectionUi();
         syncingUi = false;
     }
@@ -300,14 +301,6 @@ public class MainActivity extends Activity {
         }
         selectionCount.setText(selected + " of " + total + " selected");
         startButton.setText("Auto post to selected groups (" + selected + ")");
-    }
-
-    private void syncGroupScrollHeight(int rows) {
-        int maxHeight = dp(320);
-        int height = Math.min(rows * dp(44) + dp(12), maxHeight);
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, height);
-        ((ScrollView) groupListBox.getParent()).setLayoutParams(params);
     }
 
     private void mergeImportResult() {
