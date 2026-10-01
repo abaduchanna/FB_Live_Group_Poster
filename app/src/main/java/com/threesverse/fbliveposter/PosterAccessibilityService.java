@@ -51,7 +51,7 @@ public class PosterAccessibilityService extends AccessibilityService {
     private static final long STAGE_TIMEOUT_MS = 45000L;
     private static final long IMPORT_TIMEOUT_MS = 90000L;
     private static final int MAX_GROUP_SCANS = 12;
-    private static final int MAX_IMPORT_SCANS = 18;
+    private static final int MAX_IMPORT_SCANS = 30;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean processing;
@@ -125,7 +125,10 @@ public class PosterAccessibilityService extends AccessibilityService {
 
         if (CampaignStore.STAGE_NAV_GROUPS.equals(stage)) {
             if (onGroupsScreen(root)) {
-                setStage(p, CampaignStore.STAGE_IMPORT_SCAN);
+                // Device flow (owner-audit): Groups screen kholte hi default tab
+                // "For you" (suggested) hota hai — pehle header ka "Your groups"
+                // tab click karo, USKE BAAD scan shuru, warna galat list uthati.
+                setStage(p, CampaignStore.STAGE_PICK_TAB);
                 return;
             }
             if (stageTimedOut(p, IMPORT_TIMEOUT_MS)) {
@@ -133,6 +136,20 @@ public class PosterAccessibilityService extends AccessibilityService {
                 return;
             }
             navigateTowardGroups(p, root);
+            return;
+        }
+
+        if (CampaignStore.STAGE_PICK_TAB.equals(stage)) {
+            if (stageTimedOut(p, IMPORT_TIMEOUT_MS)) {
+                finishImport(p);
+                return;
+            }
+            AccessibilityNodeInfo tab = findByLabels(root, YOUR_GROUPS_HINTS, false);
+            if (tab != null && clickNodeOrParent(tab)) {
+                setStage(p, CampaignStore.STAGE_IMPORT_SCAN);
+                p.edit().putInt(CampaignStore.KEY_SCAN_COUNT, 0).apply();
+                scheduleProcess(1500);
+            }
             return;
         }
 
@@ -326,6 +343,13 @@ public class PosterAccessibilityService extends AccessibilityService {
         // (device-audit fix: import used to open the drawer and stall to timeout).
         AccessibilityNodeInfo seeMore = findByLabels(root, SEE_MORE_LABELS, true);
         if (seeMore != null && stageTimedOutSince(p, 1500L) && clickNodeOrParent(seeMore)) {
+            p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+            return;
+        }
+        // Even expanded, the Groups entry can sit below the drawer fold — scroll
+        // the drawer to reveal it (owner-audit: "see more ke bad scroll kar ke
+        // groups find kare").
+        if (stageTimedOutSince(p, 2200L) && scrollForward(root)) {
             p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
             return;
         }

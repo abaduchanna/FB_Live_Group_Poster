@@ -154,17 +154,24 @@ public class MainActivity extends Activity {
 
         LinearLayout listButtons = new LinearLayout(this);
         listButtons.setOrientation(LinearLayout.HORIZONTAL);
-        Button manualButton = button("Add manual group URLs");
+        Button saveSelectionButton = button("Save selection");
+        saveSelectionButton.setOnClickListener(v -> saveSelection());
+        LinearLayout.LayoutParams thirdA = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        thirdA.setMargins(0, dp(8), dp(4), 0);
+        saveSelectionButton.setLayoutParams(thirdA);
+        listButtons.addView(saveSelectionButton);
+        Button manualButton = button("Manual URLs");
         manualButton.setOnClickListener(v -> showManualUrlDialog());
-        LinearLayout.LayoutParams halfLeft = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        halfLeft.setMargins(0, dp(8), dp(4), 0);
-        manualButton.setLayoutParams(halfLeft);
+        LinearLayout.LayoutParams thirdB = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        thirdB.setMargins(0, dp(8), dp(4), 0);
+        manualButton.setLayoutParams(thirdB);
         listButtons.addView(manualButton);
         Button clearButton = button("Clear list");
         clearButton.setOnClickListener(v -> confirmClearList());
-        LinearLayout.LayoutParams halfRight = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-        halfRight.setMargins(dp(4), dp(8), 0, 0);
-        clearButton.setLayoutParams(halfRight);
+        LinearLayout.LayoutParams thirdC = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        thirdC.setMargins(dp(4), dp(8), 0, 0);
+        clearButton.setLayoutParams(thirdC);
+        listButtons.addView(clearButton);
         root.addView(listButtons);
 
         root.addView(label("4. Safety delay"));
@@ -310,6 +317,25 @@ public class MainActivity extends Activity {
         for (String name : names) pairs.add(new String[]{CampaignStore.TYPE_NAME, name});
         int added = CampaignStore.mergeTargets(this, pairs);
         Toast.makeText(this, added + " nayi groups import ho gayin — ab select karein", Toast.LENGTH_LONG).show();
+    }
+
+    /** Explicit save point (owner request: "selection ka save button ho — next
+        time select na karna pare"). Every checkbox toggle already writes
+        through to storage, so the selection DOES survive app restarts; this
+        button re-writes it and confirms the exact count in words, so dealers
+        can trust it without guessing. */
+    private void saveSelection() {
+        JSONArray all = CampaignStore.loadTargets(this);
+        CampaignStore.saveTargets(this, all);
+        int selected = 0;
+        for (int i = 0; i < all.length(); i++) {
+            JSONObject t = all.optJSONObject(i);
+            if (t != null && t.optBoolean("s", false)) selected++;
+        }
+        Toast.makeText(this, selected == 0
+                ? "Koi group select nahi hai — pehle groups check karein, phir Save dabayein"
+                : selected + " groups ka selection save ho gaya — app yaad rakhegi, dobara select nahi karna parega",
+                Toast.LENGTH_LONG).show();
     }
 
     private void showManualUrlDialog() {

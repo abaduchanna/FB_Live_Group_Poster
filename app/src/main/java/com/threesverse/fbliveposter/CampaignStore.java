@@ -35,6 +35,7 @@ final class CampaignStore {
     static final String STAGE_PRESS_POST = "press_post";
     static final String STAGE_WAIT_NEXT = "wait_next";
     static final String STAGE_IMPORT_SCAN = "import_scan";  // read visible group rows and scroll
+    static final String STAGE_PICK_TAB = "pick_tab";        // on Groups screen: tap the "Your groups" tab first
 
     static final String TYPE_URL = "url";
     static final String TYPE_NAME = "name";
