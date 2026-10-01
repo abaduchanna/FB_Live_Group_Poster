@@ -35,6 +35,9 @@ public class PosterAccessibilityService extends AccessibilityService {
     private static final List<String> MENU_LABELS = Arrays.asList("Menu");
     private static final List<String> SEE_MORE_LABELS = Arrays.asList("See more", "See all");
     private static final List<String> YOUR_GROUPS_HINTS = Arrays.asList("Your groups", "Groups you manage");
+    // "Your groups" tab ki list ke akhir me FB "Suggested for you" dikhata hai — ye
+    // bottom ka natural signal hai; suggested junk groups import hone se pehle ruk jate hain.
+    private static final List<String> SUGGESTED_LABELS = Arrays.asList("Suggested for you", "Suggested groups");
     private static final Set<String> NOISE_LABELS = new HashSet<>(Arrays.asList(
             "home", "feed", "menu", "notifications", "search", "marketplace", "watch", "gaming",
             "reels", "video", "profile", "friends", "groups", "group", "events", "pages",
@@ -50,8 +53,15 @@ public class PosterAccessibilityService extends AccessibilityService {
     ));
     private static final long STAGE_TIMEOUT_MS = 45000L;
     private static final long IMPORT_TIMEOUT_MS = 90000L;
-    private static final int MAX_GROUP_SCANS = 12;
-    private static final int MAX_IMPORT_SCANS = 30;
+    // Owner-audit (136 groups): 12 screens se bara list kabhi khatam nahi hota tha —
+    // group #13+ ke liye "list me nahi mili — skip" aa jata tha. 60 screens ≈ 300+ groups.
+    private static final int MAX_GROUP_SCANS = 60;
+    // Import scan ka cap ab sirf safety net hai — asli rukne ka signal = list ka bottom
+    // (lagataar IDLE_SCANS_TO_STOP ticks me koi naya naam nahi) ya "Suggested for you"
+    // section. Purana hard cap 30 pe 136-group list aadhi kat jati thi (owner: "30n
+    // scroll nh puray groups").
+    private static final int MAX_IMPORT_SCANS = 250;
+    private static final int IDLE_SCANS_TO_STOP = 4;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean processing;
@@ -147,7 +157,11 @@ public class PosterAccessibilityService extends AccessibilityService {
             AccessibilityNodeInfo tab = findByLabels(root, YOUR_GROUPS_HINTS, false);
             if (tab != null && clickNodeOrParent(tab)) {
                 setStage(p, CampaignStore.STAGE_IMPORT_SCAN);
-                p.edit().putInt(CampaignStore.KEY_SCAN_COUNT, 0).apply();
+                p.edit()
+                        .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
+                        .putInt(CampaignStore.KEY_NO_NEW_SCANS, 0)
+                        .putInt(CampaignStore.KEY_SCROLL_INDEX, 0)
+                        .apply();
                 scheduleProcess(1500);
             }
             return;
@@ -158,11 +172,46 @@ public class PosterAccessibilityService extends AccessibilityService {
                 finishImport(p);
                 return;
             }
-            collectGroupNames(root);
+            // "Suggested for you" ka sar nazar aaye to list khatam — us se neeche wale
+            // rows suggested junk hoti hain: unhe skip kar ke wahi tak scan (chhoti
+            // lists pe header pehli screen pe hi aa sakta hai, is liye kam az kam 3 naam).
+            int ceiling = -1;
+            AccessibilityNodeInfo suggested = findByLabels(root, SUGGESTED_LABELS, false);
+            if (suggested != null && importedNames.size() >= 3) {
+                android.graphics.Rect sr = new android.graphics.Rect();
+                suggested.getBoundsInScreen(sr);
+                ceiling = sr.top;
+            }
+            int before = importedNames.size();
+            collectGroupNames(root, ceiling);
+            if (ceiling >= 0) {
+                finishImport(p);
+                return;
+            }
+            int gained = importedNames.size() - before;
             int scans = p.getInt(CampaignStore.KEY_SCAN_COUNT, 0);
-            if (scrollForward(root) && scans < MAX_IMPORT_SCANS) {
+            if (gained > 0) {
+                // Progress: timeout refresh (90s ab sirf "naya kuch nahi" ka safety hai,
+                // poori scan ki deadline nahi) aur scroll candidate reset.
+                p.edit()
+                        .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                        .putInt(CampaignStore.KEY_NO_NEW_SCANS, 0)
+                        .putInt(CampaignStore.KEY_SCROLL_INDEX, 0)
+                        .apply();
+            } else {
+                int idle = p.getInt(CampaignStore.KEY_NO_NEW_SCANS, 0) + 1;
+                p.edit()
+                        .putInt(CampaignStore.KEY_NO_NEW_SCANS, idle)
+                        .putInt(CampaignStore.KEY_SCROLL_INDEX, p.getInt(CampaignStore.KEY_SCROLL_INDEX, 0) + 1)
+                        .apply();
+                if (idle >= IDLE_SCANS_TO_STOP) {
+                    finishImport(p); // 4 ticks me koi naya naam nahi = list ka bottom
+                    return;
+                }
+            }
+            if (scans < MAX_IMPORT_SCANS && scrollForward(p, root)) {
                 p.edit().putInt(CampaignStore.KEY_SCAN_COUNT, scans + 1).apply();
-                scheduleProcess(1100);
+                scheduleProcess(idleBackoff(p));
             } else {
                 finishImport(p);
             }
@@ -173,11 +222,17 @@ public class PosterAccessibilityService extends AccessibilityService {
         return findByLabels(root, YOUR_GROUPS_HINTS, false) != null;
     }
 
-    private void collectGroupNames(AccessibilityNodeInfo root) {
+    /** maxY = screen-space ceiling (is se neeche wale rows suggested junk hain, subtree skip); −1 = limit nahi. */
+    private void collectGroupNames(AccessibilityNodeInfo root, int maxY) {
         Deque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
+        android.graphics.Rect bounds = new android.graphics.Rect();
         while (!queue.isEmpty()) {
             AccessibilityNodeInfo node = queue.removeFirst();
+            if (maxY >= 0) {
+                node.getBoundsInScreen(bounds);
+                if (bounds.top >= maxY) continue; // suggested section — na naam, na children
+            }
             String candidate = firstNonEmpty(node.getText(), node.getContentDescription());
             if (isGroupName(candidate) && hasClickableAncestor(node, 3)) {
                 importedNames.add(candidate.trim());
@@ -232,6 +287,8 @@ public class PosterAccessibilityService extends AccessibilityService {
                 .putBoolean(CampaignStore.KEY_IMPORT_MODE, false)
                 .putString(CampaignStore.KEY_STAGE, CampaignStore.STAGE_OPEN_GROUP)
                 .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
+                .putInt(CampaignStore.KEY_NO_NEW_SCANS, 0)
+                .putInt(CampaignStore.KEY_SCROLL_INDEX, 0)
                 .apply();
         if (names.isEmpty()) {
             toast("Koi group nahi mili — Facebook me Groups screen khola karein, phir Import dobara chalayein");
@@ -289,7 +346,12 @@ public class PosterAccessibilityService extends AccessibilityService {
             } else {
                 int scans = p.getInt(CampaignStore.KEY_SCAN_COUNT, 0);
                 if (scrollForward(root) && scans < MAX_GROUP_SCANS) {
-                    e.putInt(CampaignStore.KEY_SCAN_COUNT, scans + 1).apply();
+                    // Lambi list (136 groups) me group tak scroll karne me 30+ screens
+                    // lag sakte hain — har successful scroll progress hai, stage
+                    // timeout refresh karo warna 45s me "skip" ho jata tha.
+                    e.putInt(CampaignStore.KEY_SCAN_COUNT, scans + 1)
+                            .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                            .apply();
                     scheduleProcess(1100);
                 } else {
                     e.remove(CampaignStore.KEY_SCAN_COUNT).apply();
@@ -335,7 +397,11 @@ public class PosterAccessibilityService extends AccessibilityService {
             setStage(p, p.getBoolean(CampaignStore.KEY_IMPORT_MODE, false)
                     ? CampaignStore.STAGE_IMPORT_SCAN
                     : CampaignStore.STAGE_FIND_GROUP);
-            p.edit().putInt(CampaignStore.KEY_SCAN_COUNT, 0).apply();
+            p.edit()
+                    .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
+                    .putInt(CampaignStore.KEY_NO_NEW_SCANS, 0)
+                    .putInt(CampaignStore.KEY_SCROLL_INDEX, 0)
+                    .apply();
             return;
         }
         // The Menu drawer collapses most shortcuts behind "See more" — expand it
@@ -378,20 +444,68 @@ public class PosterAccessibilityService extends AccessibilityService {
         return null;
     }
 
+    // Device-audit: Groups screen pe tab-pager ("Your groups | For you") bhi scrollable
+    // hota hai — BFS ka pehla scrollable pager nikal kar TAB SWITCH kar deta tha, is
+    // liye list scroll nahi hoti thi. Ab candidates ko score karte hain: vertical
+    // RecyclerView/ListView sab se pehle, ViewPager sab se baad.
     private boolean scrollForward(AccessibilityNodeInfo root) {
+        List<AccessibilityNodeInfo> candidates = scrollCandidates(root);
+        for (AccessibilityNodeInfo node : candidates) {
+            if (node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return true;
+        }
+        return false;
+    }
+
+    /** Import scan: same ranked order, magar idle ticks pe candidate rotate hota hai. */
+    private boolean scrollForward(SharedPreferences p, AccessibilityNodeInfo root) {
+        List<AccessibilityNodeInfo> candidates = scrollCandidates(root);
+        if (candidates.isEmpty()) return false;
+        int start = p.getInt(CampaignStore.KEY_SCROLL_INDEX, 0) % candidates.size();
+        for (int i = 0; i < candidates.size(); i++) {
+            AccessibilityNodeInfo node = candidates.get((start + i) % candidates.size());
+            if (node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return true;
+        }
+        return false;
+    }
+
+    private List<AccessibilityNodeInfo> scrollCandidates(AccessibilityNodeInfo root) {
+        List<AccessibilityNodeInfo> found = new ArrayList<>();
         Deque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
         while (!queue.isEmpty()) {
             AccessibilityNodeInfo node = queue.removeFirst();
-            if (node.isScrollable() && node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) {
-                return true;
-            }
+            if (node.isScrollable()) found.add(node);
             for (int i = 0; i < node.getChildCount(); i++) {
                 AccessibilityNodeInfo child = node.getChild(i);
                 if (child != null) queue.addLast(child);
             }
         }
-        return false;
+        android.graphics.Rect rootRect = new android.graphics.Rect();
+        root.getBoundsInScreen(rootRect);
+        final int rootW = Math.max(1, rootRect.width());
+        final int rootH = Math.max(1, rootRect.height());
+        java.util.Collections.sort(found, (a, b) ->
+                scrollScore(b, rootW, rootH) - scrollScore(a, rootW, rootH));
+        return found;
+    }
+
+    private int scrollScore(AccessibilityNodeInfo node, int rootW, int rootH) {
+        String cls = node.getClassName() == null ? "" : node.getClassName().toString();
+        int score = 0;
+        if (cls.contains("ViewPager")) score -= 600;                    // horizontal tab pager
+        if (cls.contains("RecyclerView") || cls.contains("ListView")) score += 250;
+        else if (cls.contains("ScrollView")) score += 150;
+        android.graphics.Rect r = new android.graphics.Rect();
+        node.getBoundsInScreen(r);
+        if (r.height() >= rootH * 0.4) score += 120;                    // full-height vertical list
+        if (r.width() >= rootW * 0.5) score += 60;
+        else score -= 200;                                              // narrow strip
+        return score;
+    }
+
+    /** Idle (naya naam nahi) ticks pe lamba wait — slow network pe content load hone ka time. */
+    private long idleBackoff(SharedPreferences p) {
+        return p.getInt(CampaignStore.KEY_NO_NEW_SCANS, 0) > 0 ? 2000L : 1100L;
     }
 
     private void advanceToNextGroup() {

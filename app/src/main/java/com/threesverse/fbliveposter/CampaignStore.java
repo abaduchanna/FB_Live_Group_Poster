@@ -24,6 +24,8 @@ final class CampaignStore {
     static final String KEY_LAST_ACTION = "last_action";
     static final String KEY_STAGE_SINCE = "stage_since";
     static final String KEY_SCAN_COUNT = "scan_count";
+    static final String KEY_NO_NEW_SCANS = "import_no_new_scans";
+    static final String KEY_SCROLL_INDEX = "import_scroll_index";
     static final String KEY_IMPORT_MODE = "import_mode";
     static final String KEY_IMPORT_RESULT = "import_result_json";
 
@@ -178,6 +180,8 @@ final class CampaignStore {
                 .putBoolean(KEY_IMPORT_MODE, false)
                 .putString(KEY_STAGE, STAGE_OPEN_GROUP)
                 .putInt(KEY_SCAN_COUNT, 0)
+                .putInt(KEY_NO_NEW_SCANS, 0)
+                .putInt(KEY_SCROLL_INDEX, 0)
                 .apply();
     }
 }
