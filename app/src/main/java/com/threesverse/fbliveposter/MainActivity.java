@@ -99,7 +99,7 @@ public class MainActivity extends Activity {
         TextView title = text("FB Live Group Poster", 26, true);
         title.setTextColor(FB_BLUE);
         root.addView(title);
-        root.addView(text("Facebook se apni groups list import karein, groups select karein, aur selected groups par live link auto-post karein. Facebook password kabhi nahi mangta.", 15, false));
+        root.addView(text("Import your group list from Facebook, select the groups, and auto-post your live link to the selected groups. Your Facebook password is never asked for.", 15, false));
 
         Button themeToggle = button(darkTheme ? "Light theme" : "Dark theme");
         themeToggle.setContentDescription(darkTheme ? "Switch to Facebook light theme" : "Switch to Facebook dark theme");
@@ -109,7 +109,7 @@ public class MainActivity extends Activity {
         });
         root.addView(themeToggle);
 
-        facebookAppStatus = text("Facebook app: Start par choose hogi", 14, true);
+        facebookAppStatus = text("Facebook app: chosen when you press Start", 14, true);
         facebookAppStatus.setPadding(0, dp(12), 0, 0);
         root.addView(facebookAppStatus);
 
@@ -117,11 +117,11 @@ public class MainActivity extends Activity {
         linkInput = input("Facebook live link", false);
         root.addView(linkInput);
 
-        root.addView(label("2. Message (khaali chhoda to sirf live link post hoga)"));
+        root.addView(label("2. Message (leave empty to post only the live link)"));
         messageInput = input("Message — optional", true);
         root.addView(messageInput);
 
-        root.addView(label("3. Groups — Facebook se import karein, phir select karein"));
+        root.addView(label("3. Groups — import from Facebook, then select"));
         Button importButton = button("Import groups from Facebook");
         importButton.setOnClickListener(v -> startImport());
         root.addView(importButton);
@@ -180,7 +180,7 @@ public class MainActivity extends Activity {
         root.addView(delayInput);
 
         autoPostInput = new CheckBox(this);
-        autoPostInput.setText("Post button automatically press kare (experimental)");
+        autoPostInput.setText("Press the Post button automatically (experimental)");
         autoPostInput.setTextColor(darkTheme ? FB_DARK_TEXT : FB_LIGHT_TEXT);
         autoPostInput.setPadding(0, dp(10), 0, dp(10));
         root.addView(autoPostInput);
@@ -205,7 +205,7 @@ public class MainActivity extends Activity {
         status.setPadding(0, dp(18), 0, 0);
         root.addView(status);
 
-        TextView warning = text("Important: import aap ke Facebook account ki visible groups dikhata hai — jo group aap me shamil nahi usay uncheck karein. Sirf un groups mein post karein jahan promotion/live links allowed hon. Same phone par Facebook Live background mein jane se stream ruk sakti hai; doosra phone zyada reliable hai.", 13, false);
+        TextView warning = text("Important: the import shows the groups visible to your Facebook account — uncheck any group you are not a member of. Post only in groups where promotion/live links are allowed. Running Facebook Live in the background on the same phone can stop the stream; a second phone is more reliable.", 13, false);
         warning.setTextColor(darkTheme ? Color.rgb(176, 179, 184) : Color.rgb(101, 103, 107));
         warning.setPadding(0, dp(18), 0, 0);
         root.addView(warning);
@@ -221,7 +221,7 @@ public class MainActivity extends Activity {
         autoPostInput.setChecked(p.getBoolean(CampaignStore.KEY_AUTO_POST, false));
         String savedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
         if (!savedPackage.isEmpty()) {
-            facebookAppStatus.setText("Last used: " + facebookLabel(savedPackage) + " — Start par dobara choose hogi");
+            facebookAppStatus.setText("Last used: " + facebookLabel(savedPackage) + " — you will choose again on Start");
         }
     }
 
@@ -234,7 +234,7 @@ public class MainActivity extends Activity {
         groupListBox.removeAllViews();
 
         if (targets.length() == 0) {
-            TextView empty = text("Abhi koi group nahi hai. Pehle \"Import groups from Facebook\" dabayein ya manual URLs add karein.", 13, false);
+            TextView empty = text("No groups yet. Tap \"Import groups from Facebook\" first, or add manual URLs.", 13, false);
             empty.setPadding(0, dp(8), 0, dp(8));
             groupListBox.addView(empty);
             selectAllBox.setEnabled(false);
@@ -316,7 +316,7 @@ public class MainActivity extends Activity {
         List<String[]> pairs = new ArrayList<>();
         for (String name : names) pairs.add(new String[]{CampaignStore.TYPE_NAME, name});
         int added = CampaignStore.mergeTargets(this, pairs);
-        Toast.makeText(this, added + " nayi groups import ho gayin — ab select karein", Toast.LENGTH_LONG).show();
+        Toast.makeText(this, added + " new groups imported — now select them", Toast.LENGTH_LONG).show();
     }
 
     /** Explicit save point (owner request: "selection ka save button ho — next
@@ -333,21 +333,21 @@ public class MainActivity extends Activity {
             if (t != null && t.optBoolean("s", false)) selected++;
         }
         Toast.makeText(this, selected == 0
-                ? "Koi group select nahi hai — pehle groups check karein, phir Save dabayein"
-                : selected + " groups ka selection save ho gaya — app yaad rakhegi, dobara select nahi karna parega",
+                ? "No groups selected — check some groups first, then tap Save"
+                : "Selection saved for " + selected + " groups — the app will remember it, no need to select again",
                 Toast.LENGTH_LONG).show();
     }
 
     private void showManualUrlDialog() {
         final EditText input = new EditText(this);
-        input.setHint("https://www.facebook.com/groups/...\n(har line par aik URL)");
+        input.setHint("https://www.facebook.com/groups/...\n(one URL per line)");
         input.setTextSize(14);
         input.setInputType(InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         input.setMinLines(4);
 
         new AlertDialog.Builder(this)
                 .setTitle("Manual group URLs")
-                .setMessage("Facebook URL wale groups bhi list mein add ho jayenge (import ki groups ke sath).")
+                .setMessage("Groups with Facebook URLs will also be added to the list (alongside the imported groups).")
                 .setView(input)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Add", (dialog, which) -> {
@@ -356,7 +356,7 @@ public class MainActivity extends Activity {
                         pairs.add(new String[]{CampaignStore.TYPE_URL, url});
                     }
                     int added = CampaignStore.mergeTargets(this, pairs);
-                    Toast.makeText(this, added + " URLs add huin", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, added + " URLs added", Toast.LENGTH_SHORT).show();
                     rebuildGroupList();
                 })
                 .show();
@@ -365,7 +365,7 @@ public class MainActivity extends Activity {
     private void confirmClearList() {
         new AlertDialog.Builder(this)
                 .setTitle("Clear group list?")
-                .setMessage("Imported aur manual dono lists hat jayengi.")
+                .setMessage("Both the imported and the manual lists will be removed.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Clear", (dialog, which) -> {
                     CampaignStore.saveTargets(this, new JSONArray());
@@ -378,7 +378,7 @@ public class MainActivity extends Activity {
 
     private void startImport() {
         if (!PosterAccessibilityService.isEnabled(this)) {
-            Toast.makeText(this, "Pehle Accessibility service enable karein", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Enable the Accessibility service first", Toast.LENGTH_LONG).show();
             startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             return;
         }
@@ -388,7 +388,7 @@ public class MainActivity extends Activity {
     private void chooseFacebookApp(final boolean forImport, final int delay) {
         List<String> packages = installedFacebookPackages();
         if (packages.isEmpty()) {
-            Toast.makeText(this, "Facebook app install aur login karein — Facebook, Facebook Lite ya clone, sab chalenge", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Install and log in to a Facebook app — Facebook, Facebook Lite or a clone all work", Toast.LENGTH_LONG).show();
             return;
         }
 
@@ -400,7 +400,7 @@ public class MainActivity extends Activity {
         int pad = dp(20);
         panel.setPadding(pad, dp(4), pad, dp(4));
 
-        TextView hint = text("Facebook, Facebook Lite ya clone — har campaign se pehle aap choose karte hain. App kabhi khud select nahi karti.", 14, false);
+        TextView hint = text("Facebook, Facebook Lite or a clone — you choose before every campaign. The app never picks one by itself.", 14, false);
         hint.setPadding(0, 0, 0, dp(8));
         panel.addView(hint);
 
@@ -421,7 +421,7 @@ public class MainActivity extends Activity {
         panel.addView(group);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
-                .setTitle("Kaunsi Facebook app use karni hai?")
+                .setTitle("Which Facebook app do you want to use?")
                 .setView(panel)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton(forImport ? "Import in selected" : "Use selected", null)
@@ -510,25 +510,25 @@ public class MainActivity extends Activity {
         }
 
         if (!FACEBOOK_URL.matcher(link).find()) {
-            linkInput.setError("Valid Facebook link paste karein");
+            linkInput.setError("Paste a valid Facebook link");
             return;
         }
         if (selected.isEmpty()) {
-            Toast.makeText(this, "Pehle groups import karein aur kam az kam aik select karein", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Import groups first and select at least one", Toast.LENGTH_LONG).show();
             return;
         }
         if (delay < 45) {
-            delayInput.setError("Minimum 45 seconds rakhein");
+            delayInput.setError("Use at least 45 seconds");
             return;
         }
 
         final int safeDelay = delay;
         String mode = autoPostInput.isChecked()
-                ? "App composer fill karke Post bhi press karegi."
-                : "App composer fill karegi; Post aap khud press karenge.";
+                ? "The app will fill the composer and also press Post."
+                : "The app will fill the composer; you press Post yourself.";
         new AlertDialog.Builder(this)
                 .setTitle("Start for " + selected.size() + " groups?")
-                .setMessage(mode + "\n\nGroup rules aur Facebook restrictions ki zimmedari user ki hai.")
+                .setMessage(mode + "\n\nYou are responsible for group rules and Facebook restrictions.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Continue", (dialog, which) -> chooseFacebookApp(false, safeDelay))
                 .show();
@@ -551,16 +551,16 @@ public class MainActivity extends Activity {
         Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
         if (launch == null) {
             CampaignStore.stop(this);
-            Toast.makeText(this, "Selected Facebook app launch nahi hui", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Could not launch the selected Facebook app", Toast.LENGTH_LONG).show();
             return;
         }
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             startActivity(launch);
-            Toast.makeText(this, "Facebook khulne par app khud navigate karegi: Feeds → Menu drawer → Groups → Your groups. Facebook ko khula chhore dein — list ban jaye to is app par wapas aayen.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "When Facebook opens, the app navigates by itself: Feeds → Menu drawer → Groups → Your groups. Keep Facebook open — when the list is built, you will return to this app.", Toast.LENGTH_LONG).show();
         } catch (Exception failed) {
             CampaignStore.stop(this);
-            Toast.makeText(this, "Facebook app launch fail — dobara koshish karein", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Facebook app launch failed — try again", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -586,7 +586,7 @@ public class MainActivity extends Activity {
 
         if (!PosterAccessibilityService.isEnabled(this)) {
             CampaignStore.stop(this);
-            Toast.makeText(this, "Pehle Accessibility service enable karein", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Enable the Accessibility service first", Toast.LENGTH_LONG).show();
             startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
             return;
         }
@@ -611,7 +611,7 @@ public class MainActivity extends Activity {
         boolean running = p.getBoolean(CampaignStore.KEY_RUNNING, false);
         boolean importing = p.getBoolean(CampaignStore.KEY_IMPORT_MODE, false);
         if (importing) {
-            status.setText("Status: Facebook se groups scan ho rahi hain…");
+            status.setText("Status: scanning groups from Facebook…");
             return;
         }
         int index = p.getInt(CampaignStore.KEY_INDEX, 0);

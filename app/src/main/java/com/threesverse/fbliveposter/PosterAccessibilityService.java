@@ -299,9 +299,9 @@ public class PosterAccessibilityService extends AccessibilityService {
                 .putInt(CampaignStore.KEY_SCROLL_INDEX, 0)
                 .apply();
         if (names.isEmpty()) {
-            toast("Koi group nahi mili — Facebook me Groups screen khola karein, phir Import dobara chalayein");
+            toast("No groups found — open the Groups screen in Facebook, then run Import again");
         } else {
-            toast(names.size() + " groups import huin — app par wapas ja kar select karein");
+            toast(names.size() + " groups imported — go back to the app to select them");
         }
     }
 
@@ -313,7 +313,7 @@ public class PosterAccessibilityService extends AccessibilityService {
         if (System.currentTimeMillis() - lastAction < 800) return;
 
         if (!CampaignStore.STAGE_WAIT_NEXT.equals(stage) && stageTimedOut(p, STAGE_TIMEOUT_MS)) {
-            toast("Group skip — screen pehchana nahi. Next group…");
+            toast("Group skipped — unrecognized screen. Next group…");
             advanceToNextGroup();
             return;
         }
@@ -354,7 +354,7 @@ public class PosterAccessibilityService extends AccessibilityService {
             if (row != null && clickNodeOrParent(row)) {
                 e.remove(CampaignStore.KEY_SCAN_COUNT).apply();
                 setStage(p, CampaignStore.STAGE_OPEN_COMPOSER);
-                toast("Group mila: " + name);
+                toast("Found group: " + name);
                 scheduleProcess(1500);
             } else {
                 int scans = p.getInt(CampaignStore.KEY_SCAN_COUNT, 0);
@@ -368,7 +368,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                     scheduleProcess(1100);
                 } else {
                     e.remove(CampaignStore.KEY_SCAN_COUNT).apply();
-                    toast("Group list me nahi mili: " + name + " — skip");
+                    toast("Group not in your list: " + name + " — skipping");
                     advanceToNextGroup();
                 }
             }
@@ -385,7 +385,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                     setStage(p, CampaignStore.STAGE_PRESS_POST);
                     toast(p.getBoolean(CampaignStore.KEY_AUTO_POST, false)
                             ? "Message ready — posting…"
-                            : "Message ready — Post manually press karein");
+                            : "Message ready — press Post manually");
                     if (p.getBoolean(CampaignStore.KEY_AUTO_POST, false)) scheduleProcess(1200);
                 }
             }
@@ -593,7 +593,7 @@ public class PosterAccessibilityService extends AccessibilityService {
         String selectedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
         if (selectedPackage.isEmpty()) {
             CampaignStore.stop(context);
-            Toast.makeText(context, "Facebook app select nahi hui. Campaign dobara Start karein.", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "Facebook app was not selected. Start the campaign again.", Toast.LENGTH_LONG).show();
             return;
         }
 
@@ -618,7 +618,7 @@ public class PosterAccessibilityService extends AccessibilityService {
             intent = context.getPackageManager().getLaunchIntentForPackage(selectedPackage);
             if (intent == null) {
                 CampaignStore.stop(context);
-                Toast.makeText(context, "Selected Facebook app launch nahi hui. Campaign stopped.", Toast.LENGTH_LONG).show();
+                Toast.makeText(context, "Could not launch the selected Facebook app. Campaign stopped.", Toast.LENGTH_LONG).show();
                 return;
             }
         }
@@ -628,7 +628,7 @@ public class PosterAccessibilityService extends AccessibilityService {
             context.startActivity(intent);
         } catch (Exception missing) {
             CampaignStore.stop(context);
-            Toast.makeText(context, "Selected Facebook app available nahi. Campaign stopped.", Toast.LENGTH_LONG).show();
+            Toast.makeText(context, "The selected Facebook app is not available. Campaign stopped.", Toast.LENGTH_LONG).show();
         }
     }
 
