@@ -544,6 +544,7 @@ public class MainActivity extends Activity {
                 .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
                 .putLong(CampaignStore.KEY_LAST_ACTION, System.currentTimeMillis())
                 .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
+                .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
                 .apply();
 
         facebookAppStatus.setText("Import app: " + facebookLabel(packageName));
@@ -556,7 +557,7 @@ public class MainActivity extends Activity {
         launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         try {
             startActivity(launch);
-            Toast.makeText(this, "Facebook me Groups screen par jayein aur rukein — scanning khud hogi. Khatam hone par is app par wapas aayen.", Toast.LENGTH_LONG).show();
+            Toast.makeText(this, "Facebook khulne par app khud navigate karegi: Feeds → Menu drawer → Groups → Your groups. Facebook ko khula chhore dein — list ban jaye to is app par wapas aayen.", Toast.LENGTH_LONG).show();
         } catch (Exception failed) {
             CampaignStore.stop(this);
             Toast.makeText(this, "Facebook app launch fail — dobara koshish karein", Toast.LENGTH_LONG).show();
