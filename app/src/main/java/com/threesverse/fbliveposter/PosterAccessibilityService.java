@@ -34,7 +34,8 @@ import java.util.Set;
 
 public class PosterAccessibilityService extends AccessibilityService {
     private static final List<String> COMPOSER_LABELS = Arrays.asList(
-            "Write something", "What's on your mind", "Create a public post", "Create post", "Say something"
+            "Write something", "What's on your mind", "Create a public post", "Create post", "Say something",
+            "How are you feeling", "Post to Facebook"
     );
     private static final List<String> POST_LABELS = Arrays.asList("Post", "POST", "Publish");
     private static final List<String> GROUPS_LABELS = Arrays.asList("Groups");
@@ -630,6 +631,18 @@ public class PosterAccessibilityService extends AccessibilityService {
                     return;
                 }
                 if (!stageTimedOutSince(p, 15000L)) return;
+                // v0.6.6: 15s ke baad Feeds tap ko FORCE-accept karo. Warna
+                // feedTapped latch kabhi set nahi hota (FB build jisme Feeds
+                // node hi expose nahi hota) aur neeche wala 12s BACK + reset
+                // loop automation ko FB se bahar nikal deta tha = "app exe
+                // nahi chal rahi". Menu ab unconditional hai (STEP 2), to
+                // feed-tap miss koi deadlock nahi.
+                p.edit()
+                        .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
+                        .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                        .apply();
+                setNavTrace("feedTap=forced act=accept-no-feeds-node");
+                return;
             }
 
             if (onFeed) {
@@ -641,16 +654,13 @@ public class PosterAccessibilityService extends AccessibilityService {
                     scheduleProcess(1800L);
                     return;
                 }
-                // Feeds tab nahi (post detail, dialog, covered screen) — 12s
-                // me BACK: feed pe wapas, wahan se drawer flow dobara.
+                // v0.6.6: 12s BACK + feedTapped-reset HATA — feed/Feeds page
+                // pe BACK FB se bahar nikal jata tha (automation dead = owner
+                // ka "app exe nahi chal rahi"). Ab wait-only + fall-through:
+                // Menu (STEP 2, ab unconditional) isi tick drawer khol sakta
+                // hai — drawer Feeds page se bhi khulta hai.
                 setNavTrace("feed=0 feeds=" + (feedsVisible ? "visible" : (feeds == null ? "none" : "off/gone"))
-                        + " act=feed-wait");
-                if (!stageTimedOutSince(p, 12000L)) return;
-                p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
-                p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false).apply();
-                setNavTrace("feed=0 act=feed-back-reset");
-                performGlobalAction(GLOBAL_ACTION_BACK);
-                return;
+                        + " act=feed-wait+menu-next");
             }
         }
 
@@ -724,33 +734,42 @@ public class PosterAccessibilityService extends AccessibilityService {
             return;
         }
 
-        // STEP 2 (owner step 2): side drawer kholo — SIRF FEED SE. Owner:
-        // "FB khulte hi check karo feed per hai ya nahi, phir drawer kholo".
-        // v0.6.4 gate: feed visible na ho (unknown/covered screen) to Menu tap
-        // covered-coordinates pe random tap hai — STEP 1 pehle feed pe le
-        // aata hai. Rate-limited (double-tap drawer band kar deta), bottom-25%
-        // + visible-only guards (drawer ke andar ka "Menu" text / GONE node
-        // kabhi tap nahi hoga).
-        if (onFeed && stageTimedOutSince(p, 2500L)) {
+        // STEP 2 (owner step 2): side drawer kholo (Menu tab). v0.6.6: onFeed
+        // gate HATA — composer/selected-tab hints FB build pe unreliable hain
+        // aur ye gate load-bearing tha: hint miss = drawer KABHI nahi khulta
+        // = "app exe nahi chal rahi" (v0.6.4/v0.6.5 dono me yahi deadlock
+        // tha). Asli protection wahi guards hain: VISIBLE (isVisibleToUser +
+        // bounds) + bottom 25% (drawer ke andar ka "Menu" text / GONE node
+        // kabhi pass nahi hota). Rate-limited (double-tap drawer band deta).
+        if (!menuOpen && stageTimedOutSince(p, 2500L)) {
             AccessibilityNodeInfo menu = findByLabels(root, MENU_LABELS, true);
             if (menu == null) menu = findByLabels(root, MENU_LABELS, false);
             if (menu != null && isVisibleOnScreen(root, menu)
                     && isBottomNavItem(root, menu) && clickNodeOrParent(menu)) {
                 p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
-                setNavTrace("feed=1 act=menu-click");
+                setNavTrace("act=menu-click");
                 return;
             }
-            setNavTrace("feed=1 act=menu-miss");
+            setNavTrace("act=menu-miss");
         }
 
-        // STEP 5: dead screen (drawer open twice, stray dialog…) — BACK resets
-        // the navigation so the next tick can tap Menu again instead of waiting
-        // out the whole stage timeout.
+        // STEP 5: dead screen reset — v0.6.6: BACK sirf tab jab Menu node
+        // KAHIN HI NA ho (bilkul unknown screen). Menu node MILA magar guards
+        // ne block kiya to BACK NAHI — BACK feed/FB se bahar nikal deta tha;
+        // wait karo aur trace me dikhao.
         if (stageTimedOutSince(p, 12000L)) {
-            p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
-            p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false).apply();
-            setNavTrace("act=nav-back-reset");
-            performGlobalAction(GLOBAL_ACTION_BACK);
+            AccessibilityNodeInfo menu5 = findByLabels(root, MENU_LABELS, true);
+            if (menu5 == null) menu5 = findByLabels(root, MENU_LABELS, false);
+            if (menu5 == null) {
+                p.edit()
+                        .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                        .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
+                        .apply();
+                setNavTrace("act=nav-back-reset");
+                performGlobalAction(GLOBAL_ACTION_BACK);
+            } else {
+                setNavTrace("act=menu-blocked-wait");
+            }
         }
     }
 
