@@ -21,7 +21,13 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - run: gradle assembleDebug lint
+      - name: Build signed release APK (stable keystore)
+        run: gradle assembleRelease lint
+        env:
+          FB_KEYSTORE_B64: ${{ secrets.FB_KEYSTORE_B64 }}
+          FB_STORE_PASS: ${{ secrets.FB_STORE_PASS }}
+          FB_KEY_PASS: ${{ secrets.FB_KEY_PASS }}
+          FB_KEY_ALIAS: ${{ secrets.FB_KEY_ALIAS }}
 
       # Release assets do NOT count against artifact storage quota
       # (same pattern as WiFi Transfer / POS / Studio repos).
@@ -31,7 +37,7 @@ jobs:
       - name: Rename APK for release
         run: |
           mkdir rel
-          cp app/build/outputs/apk/debug/FB_Live_Group_Poster-debug.apk \
+          cp app/build/outputs/apk/release/FB_Live_Group_Poster-release.apk \
              "rel/FB_Live_Group_Poster-v${VERSION}.apk"
           ls -la rel/
 
@@ -46,6 +52,11 @@ jobs:
           body: |
             FB Live Group Poster Android app (side-load).
 
-            Install: uninstall the previous version once if Android complains
-            about the signature, then install this APK.
+            v0.4.7 is release-signed — older DEBUG builds (up to v0.4.6) must be
+            uninstalled once before installing; every later version then
+            installs right over (same signature).
+
+            If Google Play Protect blocks the install: Play Store > profile icon
+            > Play Protect > gear icon > turn OFF "Scan apps with Play
+            Protect", install, then turn it back ON.
           files: rel/FB_Live_Group_Poster-v${{ env.VERSION }}.apk

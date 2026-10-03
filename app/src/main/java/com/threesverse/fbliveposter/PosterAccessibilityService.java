@@ -681,20 +681,24 @@ public class PosterAccessibilityService extends AccessibilityService {
         return null;
     }
 
+    // v0.4.7 (owner: clicks STILL dead on v0.4.6): INVERTED strategy.
+    // Facebook's Litho/custom rows report isClickable()=true and even ACCEPT
+    // performAction(ACTION_CLICK) — returning true while the screen never
+    // changes (they listen to raw touches, not accessibility clicks). The
+    // v0.4.6 a11y-click-first order therefore "succeeded" and the gesture-tap
+    // fallback never ran. A dispatched finger tap at the element's on-screen
+    // center is indistinguishable from a human touch and works on every view
+    // implementation, so tap FIRST now; the a11y click is only a fallback for
+    // the rare case the system rejects the gesture (another gesture in
+    // progress, screen state change).
     private boolean clickNodeOrParent(AccessibilityNodeInfo node) {
+        if (tapCenter(node, 3)) return true;
         AccessibilityNodeInfo current = node;
         for (int i = 0; current != null && i < 5; i++) {
             if (current.isClickable() && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
             current = current.getParent();
         }
-        // Owner-audit 2026-10-03 (v0.4.6): Facebook drawer rows ("See more"),
-        // the drawer "Groups" entry and the "Your groups" tab often expose NO
-        // clickable ancestor at all — ACTION_CLICK then silently no-ops, so the
-        // drawer opens and nothing further happens (owner: "see more click nh
-        // kar raha, groups per clicks nh kar rahi, your groups per bhi nahi").
-        // A real touch tap at the node's on-screen center works regardless of
-        // clickability metadata, so fall back to a dispatchGesture tap.
-        return tapCenter(node, 0);
+        return false;
     }
 
     /**
@@ -715,17 +719,37 @@ public class PosterAccessibilityService extends AccessibilityService {
                 continue;
             }
             if (r.width() > 8 && r.height() > 8) {
-                android.graphics.Path pt = new android.graphics.Path();
-                pt.moveTo(r.centerX(), r.centerY());
-                pt.lineTo(r.centerX(), r.centerY());
-                GestureDescription gesture = new GestureDescription.Builder()
-                        .addStroke(new GestureDescription.StrokeDescription(pt, 0, 60))
-                        .build();
-                return dispatchGesture(gesture, null, null);
+                return dispatchTap(r.centerX(), r.centerY());
             }
             cur = cur.getParent();
         }
         return false;
+    }
+
+    /**
+     * ~110ms finger tap — FB's gesture detectors are happier with a slightly
+     * longer stroke than the 60ms used by v0.4.6. If the system CANCELS the
+     * gesture (overlapping gesture, window transition), retry once after 300ms.
+     */
+    private boolean dispatchTap(int x, int y) {
+        android.graphics.Path pt = new android.graphics.Path();
+        pt.moveTo(x, y);
+        pt.lineTo(x, y);
+        final GestureDescription gesture = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(pt, 0, 110))
+                .build();
+        final Handler h = new Handler(Looper.getMainLooper());
+        GestureResultCallback cb = new GestureResultCallback() {
+            @Override
+            public void onCompleted(GestureDescription g) { }
+
+            @Override
+            public void onCancelled(GestureDescription g) {
+                // one silent retry — transient cancels (window transition) happen
+                h.postDelayed(() -> dispatchGesture(g, null, null), 300);
+            }
+        };
+        return dispatchGesture(gesture, cb, h);
     }
 
     private boolean matchesPostLabel(AccessibilityEvent event) {
