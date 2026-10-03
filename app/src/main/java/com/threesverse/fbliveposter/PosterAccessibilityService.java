@@ -1,6 +1,7 @@
 package com.threesverse.fbliveposter;
 
 import android.accessibilityservice.AccessibilityService;
+import android.accessibilityservice.GestureDescription;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
@@ -686,7 +687,45 @@ public class PosterAccessibilityService extends AccessibilityService {
             if (current.isClickable() && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
             current = current.getParent();
         }
-        return node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+        // Owner-audit 2026-10-03 (v0.4.6): Facebook drawer rows ("See more"),
+        // the drawer "Groups" entry and the "Your groups" tab often expose NO
+        // clickable ancestor at all — ACTION_CLICK then silently no-ops, so the
+        // drawer opens and nothing further happens (owner: "see more click nh
+        // kar raha, groups per clicks nh kar rahi, your groups per bhi nahi").
+        // A real touch tap at the node's on-screen center works regardless of
+        // clickability metadata, so fall back to a dispatchGesture tap.
+        return tapCenter(node, 0);
+    }
+
+    /**
+     * Dispatch a real touch tap at the visible center of the node. If the node
+     * has no usable on-screen bounds (collapsed/zero-size), walk up a few
+     * parents. Returns true only if the system accepted the gesture.
+     */
+    private boolean tapCenter(AccessibilityNodeInfo node, int hops) {
+        android.graphics.Rect clip = new android.graphics.Rect();
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root != null) root.getBoundsInScreen(clip);
+        AccessibilityNodeInfo cur = node;
+        for (int i = 0; cur != null && i <= hops; i++) {
+            android.graphics.Rect r = new android.graphics.Rect();
+            cur.getBoundsInScreen(r);
+            if (!clip.isEmpty() && !r.intersect(clip)) {
+                cur = cur.getParent(); // fully outside the window — try parent
+                continue;
+            }
+            if (r.width() > 8 && r.height() > 8) {
+                android.graphics.Path pt = new android.graphics.Path();
+                pt.moveTo(r.centerX(), r.centerY());
+                pt.lineTo(r.centerX(), r.centerY());
+                GestureDescription gesture = new GestureDescription.Builder()
+                        .addStroke(new GestureDescription.StrokeDescription(pt, 0, 60))
+                        .build();
+                return dispatchGesture(gesture, null, null);
+            }
+            cur = cur.getParent();
+        }
+        return false;
     }
 
     private boolean matchesPostLabel(AccessibilityEvent event) {
