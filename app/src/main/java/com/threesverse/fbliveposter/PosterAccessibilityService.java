@@ -48,13 +48,12 @@ public class PosterAccessibilityService extends AccessibilityService {
     // Side drawer / Menu tab page khula hone ka signal — ye items sirf Menu
     // screen pe hote hain (feed posts pe kabhi nahi).
     private static final List<String> MENU_SCREEN_HINTS = Arrays.asList(
-            "Settings & privacy", "Help & support", "Log out", "All shortcuts",
-            // v0.6.3: on some FB builds the items above sit BELOW the fold of
-            // the drawer — without extra hints menuOpen() false-negatived,
-            // the drawer was treated as "closed" and the navigator re-tapped
-            // Menu (closing it) in an open/close loop. Memories/Saved are
-            // drawer/Menu-only items, never on the feed.
-            "Memories", "Saved");
+            "Settings & privacy", "Help & support", "Log out", "All shortcuts");
+    // v0.6.4 REVERT of v0.6.3's "Memories"/"Saved" hints: FB feed par
+    // kabhi-kabhi "Memories" card render hota hai — false menuOpen navigator
+    // ko feed ke top "Groups" chip pe tap karwa sakta tha (Groups FEED khulta
+    // hai, list nahi). Sirf feed-proof hints: ye 4 items feed pe KABHI nahi
+    // milte, aur owner device par inhi se menuOpen match hota aaya hai.
     // "Your groups" tab ki list ke akhir me FB "Suggested for you" dikhata hai — ye
     // bottom ka natural signal hai; suggested junk groups import hone se pehle ruk jate hain.
     private static final List<String> SUGGESTED_LABELS = Arrays.asList("Suggested for you", "Suggested groups");
@@ -113,6 +112,9 @@ public class PosterAccessibilityService extends AccessibilityService {
     // screenshot (menu= / grp= / sMore= / smN= / act= show the exact stuck
     // step and what the navigator decided to do about it).
     volatile static String lastNavTrace = "";
+    // v0.6.4: exact screen coordinates of the last dispatched tap — remote
+    // geometry debugging (owner screenshot pe dikhega tap kahan land hua).
+    volatile static String lastTapPoint = "";
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
@@ -541,25 +543,33 @@ public class PosterAccessibilityService extends AccessibilityService {
             p.edit().putInt(CampaignStore.KEY_SEEMORE_CLICKS, 0).apply();
         }
 
-        // STEP 1: ensure we are on the feed first (owner step 1).
+        // STEP 1 (owner step 1): FB khulte hi feed verify. v0.6.4: agar FB
+        // kisi aur tab pe khula hai (Video/Reels yaad-se-khula state) to har
+        // rate-limited tick pe Feeds tab actively click hota hai. Purana
+        // FEEDS_DONE latch recovery ROK deta tha — stale flag ke saath app
+        // unknown screen se Menu tap karta rehta tha, kabhi feed wapas nahi
+        // aata tha (owner: "fb open karte hi videos me maa chudwane ja raha").
         if (!menuOpen) {
             if (onFeed) {
-                if (!p.getBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)) {
-                    p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
-                            .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
-                }
-            } else if (!p.getBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)) {
+                setNavTrace("feed=1 act=feed-verified");
+            } else {
                 AccessibilityNodeInfo feeds = findByLabels(root, FEEDS_LABELS, true);
-                if (feeds != null && clickNodeOrParent(feeds)) {
-                    p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
-                            .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+                boolean feedsVisible = feeds != null && isVisibleOnScreen(root, feeds);
+                if (feedsVisible && stageTimedOutSince(p, 3500L) && clickNodeOrParent(feeds)) {
+                    p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+                    setNavTrace("feed=0 act=feeds-click");
                     scheduleProcess(1500);
                     return;
                 }
-                // Feeds tab nahi mila (already feed pe hain, ya is screen pe
-                // bottom nav nahi) — thoda intezar, phir aage badh jao.
-                if (!stageTimedOutSince(p, 3500L)) return;
-                p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true).apply();
+                // Feeds tab nahi (post detail, dialog, covered screen) — 12s
+                // me BACK: feed pe wapas, wahan se drawer flow dobara.
+                setNavTrace("feed=0 feeds=" + (feedsVisible ? "visible" : (feeds == null ? "none" : "off/gone"))
+                        + " act=feed-wait");
+                if (!stageTimedOutSince(p, 12000L)) return;
+                p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+                setNavTrace("feed=0 act=feed-back-reset");
+                performGlobalAction(GLOBAL_ACTION_BACK);
+                return;
             }
         }
 
@@ -617,22 +627,23 @@ public class PosterAccessibilityService extends AccessibilityService {
             return;
         }
 
-        // STEP 2: side drawer kholo (Menu tab / hamburger) — rate-limited
-        // (double-tap drawer band kar deta). v0.6.3 guard: sirf BOTTOM-NAV
-        // wala "Menu" tap karo (screen ke bottom 25%). BFS drawer ke andar ke
-        // "Menu" text / off-screen bottom-nav node bhi utha leta hai — us ka
-        // tap drawer band kar deta tha (open/close loop).
-        if (stageTimedOutSince(p, 2500L)) {
+        // STEP 2 (owner step 2): side drawer kholo — SIRF FEED SE. Owner:
+        // "FB khulte hi check karo feed per hai ya nahi, phir drawer kholo".
+        // v0.6.4 gate: feed visible na ho (unknown/covered screen) to Menu tap
+        // covered-coordinates pe random tap hai — STEP 1 pehle feed pe le
+        // aata hai. Rate-limited (double-tap drawer band kar deta), bottom-25%
+        // + visible-only guards (drawer ke andar ka "Menu" text / GONE node
+        // kabhi tap nahi hoga).
+        if (onFeed && stageTimedOutSince(p, 2500L)) {
             AccessibilityNodeInfo menu = findByLabels(root, MENU_LABELS, true);
             if (menu == null) menu = findByLabels(root, MENU_LABELS, false);
-            if (menu != null && isBottomNavItem(root, menu) && clickNodeOrParent(menu)) {
+            if (menu != null && isVisibleOnScreen(root, menu)
+                    && isBottomNavItem(root, menu) && clickNodeOrParent(menu)) {
                 p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
-                setNavTrace("feed=" + (onFeed ? 1 : 0) + " act=menu-click");
+                setNavTrace("feed=1 act=menu-click");
                 return;
             }
-            setNavTrace("feed=" + (onFeed ? 1 : 0) + " menu-node="
-                    + (menu == null ? "none" : (isBottomNavItem(root, menu) ? "bottom" : "not-bottom"))
-                    + " act=menu-miss");
+            setNavTrace("feed=1 act=menu-miss");
         }
 
         // STEP 5: dead screen (drawer open twice, stray dialog…) — BACK resets
@@ -653,9 +664,17 @@ public class PosterAccessibilityService extends AccessibilityService {
     /** True only if the node is actually RENDERED on screen right now with a
      * tappable size. BFS returns off-screen nodes inside scrollable
      * containers too; tapping those either lands nowhere or hits the
-     * container's visible center — a random row. */
+     * container's visible center — a random row. v0.6.4: isVisibleToUser()
+     * check bhi — GONE/invisible nodes (band drawer ka content, removed rows)
+     * tree me STALE bounds ke saath rehte hain; bounds-only check unhe
+     * "visible" keh deta tha aur tap screen ke beech kisi covered coordinate
+     * pe land karta tha. */
     private boolean isVisibleOnScreen(AccessibilityNodeInfo root, AccessibilityNodeInfo node) {
         if (root == null) return false;
+        try {
+            if (!node.isVisibleToUser()) return false;
+        } catch (Exception ignored) {
+        }
         android.graphics.Rect win = new android.graphics.Rect();
         root.getBoundsInScreen(win);
         if (win.isEmpty()) return false;
@@ -968,6 +987,11 @@ public class PosterAccessibilityService extends AccessibilityService {
         return lastNavTrace;
     }
 
+    /** v0.6.4: last dispatched tap coordinates, e.g. "tap@(540,2100)". */
+    static String lastTap() {
+        return lastTapPoint;
+    }
+
     /** v0.6.0 self-test: MainActivity asks the service to tap a point inside
      * the app's own window (the probe row). If the gesture engine works,
      * Android delivers a REAL click to that row and the row reports back via
@@ -988,9 +1012,13 @@ public class PosterAccessibilityService extends AccessibilityService {
     }
 
     /**
-     * Dispatch a real touch tap at the visible center of the node. If the node
-     * has no usable on-screen bounds (collapsed/zero-size), walk up a few
-     * parents. Returns true only if the system accepted the gesture.
+     * Dispatch a real touch tap at the visible center of the node. If the
+     * node itself is degenerate (tiny), walk up a few parents. v0.6.4: a
+     * node/parent FULLY outside the window is a HARD FAIL — climbing to its
+     * parent lands on some on-screen container (drawer overlay, window root)
+     * and the container's center-tap is a random tap in the middle of the
+     * screen (Video/Reels used to open that way). Returns true only if the
+     * system accepted the gesture.
      */
     private boolean tapCenter(AccessibilityNodeInfo node, int hops, int durationMs) {
         android.graphics.Rect clip = new android.graphics.Rect();
@@ -1000,14 +1028,14 @@ public class PosterAccessibilityService extends AccessibilityService {
         for (int i = 0; cur != null && i <= hops; i++) {
             android.graphics.Rect r = new android.graphics.Rect();
             cur.getBoundsInScreen(r);
-            if (!clip.isEmpty() && !r.intersect(clip)) {
-                cur = cur.getParent(); // fully outside the window — try parent
-                continue;
+            if (!clip.isEmpty() && !android.graphics.Rect.intersects(clip, r)) {
+                return false; // off-screen: NEVER climb to a random container
             }
+            if (!clip.isEmpty()) r.intersect(clip); // visible-part center for partial nodes
             if (r.width() > 8 && r.height() > 8) {
                 return dispatchTap(r.centerX(), r.centerY(), durationMs);
             }
-            cur = cur.getParent();
+            cur = cur.getParent(); // degenerate size only — parent of a tiny node is its row
         }
         return false;
     }
@@ -1017,6 +1045,7 @@ public class PosterAccessibilityService extends AccessibilityService {
      * (overlapping gesture, window transition), retry once after 300ms.
      */
     private boolean dispatchTap(int x, int y, int durationMs) {
+        lastTapPoint = "tap@(" + x + "," + y + ")";
         android.graphics.Path pt = new android.graphics.Path();
         pt.moveTo(x, y);
         pt.lineTo(x, y);

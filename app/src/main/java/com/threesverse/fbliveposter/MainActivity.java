@@ -823,7 +823,9 @@ public class MainActivity extends Activity {
         // v0.6.3: live navigation trace — kis step pe navigator hai (menu=/grp=/sMore=/act=).
         // "drawer khulta hai par Groups nahi milta" jaisi reports ab 1 screenshot me diagnose.
         String nav = PosterAccessibilityService.navTrace();
-        if (nav.length() > 0) diag += "\nNav: " + nav;
+        String tap = PosterAccessibilityService.lastTap();
+        if (nav.length() > 0) diag += "\nNav: " + nav + (tap.length() > 0 ? " " + tap : "");
+        else if (tap.length() > 0) diag += "\nLast tap: " + tap;
         boolean running = p.getBoolean(CampaignStore.KEY_RUNNING, false);
         boolean importing = p.getBoolean(CampaignStore.KEY_IMPORT_MODE, false);
         String base;
