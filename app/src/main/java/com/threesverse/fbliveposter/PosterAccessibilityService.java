@@ -76,9 +76,24 @@ public class PosterAccessibilityService extends AccessibilityService {
     private boolean processing;
     private final Set<String> importedNames = new LinkedHashSet<>();
 
+    // v0.6.0 LIVE diagnostics — the service and MainActivity run in the same
+    // process, so plain statics are safe (isMinifyEnabled=false). These exist
+    // because a green toggle in the settings list does not prove the service
+    // is actually CONNECTED and receiving events, and on Android 13+ a
+    // side-loaded app's accessibility switch can stay blocked by "Restricted
+    // setting" — which was the most likely cause of "nothing clicks at all".
+    private static PosterAccessibilityService instance;
+    volatile static boolean connected = false;
+    volatile static long lastEventAt = 0L;
+    volatile static long lastGestureAt = 0L;
+    volatile static String lastGestureResult = "";
+    private static int tapFailStreak = 0;
+    private static boolean gestureBroken = false;
+
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null || event.getPackageName() == null) return;
+        lastEventAt = System.currentTimeMillis();
         SharedPreferences p = CampaignStore.prefs(this);
         boolean running = p.getBoolean(CampaignStore.KEY_RUNNING, false);
         boolean importing = p.getBoolean(CampaignStore.KEY_IMPORT_MODE, false);
@@ -102,6 +117,27 @@ public class PosterAccessibilityService extends AccessibilityService {
     @Override
     public void onInterrupt() {
         processing = false;
+    }
+
+    @Override
+    protected void onServiceConnected() {
+        super.onServiceConnected();
+        instance = this;
+        connected = true;
+        lastEventAt = 0L;
+    }
+
+    @Override
+    public boolean onUnbind(Intent intent) {
+        connected = false;
+        return super.onUnbind(intent);
+    }
+
+    @Override
+    public void onDestroy() {
+        connected = false;
+        instance = null;
+        super.onDestroy();
     }
 
     private boolean isTrackedPackage(String pkg, SharedPreferences p) {
@@ -681,37 +717,32 @@ public class PosterAccessibilityService extends AccessibilityService {
         return null;
     }
 
-    // v0.5.0 (owner: "koi bhi click nahi kar raha" on v0.4.9): ADAPTIVE engine.
-    // History: v0.4.6 a11y-click-first — Litho rows accepted ACTION_CLICK but
-    // nothing happened. v0.4.7/v0.4.9 tap-first — on the owner's device SOME
-    // ROMs dispatch accessibility gestures unreliably, so now NOTHING clicked.
-    // There is no single mechanism that works on every device/FB version, so
-    // consecutive click attempts CYCLE through three mechanisms:
-    //   0) 110ms touch tap (fallback: a11y click if the gesture is rejected)
-    //   1) a11y ACTION_CLICK walk (fallback: touch tap)
-    //   2) 220ms touch tap (still below the ~400ms long-press threshold;
-    //      fallback: a11y click)
-    // An element that does not respond keeps getting the next mechanism on the
-    // following tick, so whichever path the device supports is found within
-    // ~3 attempts. The last attempt is recorded for the in-app status line.
-    private static int clickMode = 0;
-
+    // v0.6.0 click engine — tap-FIRST, and it STAYS tap-first.
+    // v0.5.0 rotated the mechanism on every click; that quietly reintroduced
+    // the v0.4.6 failure: after one working touch-tap the NEXT click went to
+    // the a11y path, and FB's Litho rows accept ACTION_CLICK with no visible
+    // effect (silent no-op that still reports success). Now the real-finger
+    // tap is always tried first; the a11y click is only a fallback for the
+    // current click, and if the system REJECTS gestures three times in a row
+    // (rare ROMs) the engine latches a11y-first instead of flip-flopping
+    // between a working and a dead mechanism on alternating clicks.
     private boolean clickNodeOrParent(AccessibilityNodeInfo node) {
         String label = safeLabel(node);
-        int mode = Math.floorMod(clickMode++, 3);
         boolean ok;
-        switch (mode) {
-            case 0:
-                ok = tapCenter(node, 3, 110) || clickA11y(node);
-                break;
-            case 1:
-                ok = clickA11y(node) || tapCenter(node, 3, 110);
-                break;
-            default:
-                ok = tapCenter(node, 3, 220) || clickA11y(node);
-                break;
+        String how;
+        if (gestureBroken) {
+            ok = clickA11y(node) || tapCenter(node, 3, 110);
+            how = "a11y-first";
+        } else if (tapCenter(node, 3, 110)) {
+            ok = true;
+            how = "touch-tap";
+        } else {
+            // gesture not accepted this tick — land the click via a11y first,
+            // then still try a slightly longer tap as the last resort.
+            ok = clickA11y(node) || tapCenter(node, 3, 220);
+            how = "tap-rejected-fallback";
         }
-        noteClick(mode, label, ok);
+        noteClick(how, label, ok);
         return ok;
     }
 
@@ -733,15 +764,47 @@ public class PosterAccessibilityService extends AccessibilityService {
         return s;
     }
 
-    private void noteClick(int mode, String label, boolean ok) {
-        String modeName = mode == 0 ? "touch-tap" : (mode == 1 ? "a11y-click" : "long-tap");
+    private void noteClick(String how, String label, boolean ok) {
         try {
             CampaignStore.prefs(this).edit()
                     .putString(CampaignStore.KEY_LAST_CLICK,
-                            modeName + (ok ? " OK: " : " FAILED: ") + label)
+                            how + (ok ? " OK: " : " FAILED: ") + label)
                     .apply();
         } catch (Exception ignored) {
         }
+    }
+
+    // ---- v0.6.0 diagnostics helpers (read by MainActivity, same process) ----
+
+    static boolean isLive() {
+        return connected;
+    }
+
+    static long lastEventMillis() {
+        return lastEventAt;
+    }
+
+    static String lastGesture() {
+        return lastGestureResult.isEmpty() ? "not tested yet" : lastGestureResult;
+    }
+
+    /** v0.6.0 self-test: MainActivity asks the service to tap a point inside
+     * the app's own window (the probe row). If the gesture engine works,
+     * Android delivers a REAL click to that row and the row reports back via
+     * noteSelfTestHit() — end-to-end proof that service + gestures + touch
+     * delivery all work on this device. */
+    static boolean requestSelfTest(int x, int y) {
+        if (instance == null) return false;
+        lastGestureResult = "self-test dispatching...";
+        return instance.dispatchTap(x, y, 110);
+    }
+
+    /** Called by MainActivity when the probe row receives the synthetic tap. */
+    static void noteSelfTestHit() {
+        lastGestureAt = System.currentTimeMillis();
+        lastGestureResult = "self-test CLICK RECEIVED - engine OK";
+        tapFailStreak = 0;
+        gestureBroken = false;
     }
 
     /**
@@ -781,17 +844,45 @@ public class PosterAccessibilityService extends AccessibilityService {
                 .addStroke(new GestureDescription.StrokeDescription(pt, 0, durationMs))
                 .build();
         final Handler h = new Handler(Looper.getMainLooper());
+        // v0.6.0: the boolean return of dispatchGesture only means the system
+        // QUEUED the gesture — completion/cancellation arrives via callback
+        // and is recorded so the in-app card can show whether real taps
+        // actually land on this ROM (accepted-but-cancelled was invisible).
         GestureResultCallback cb = new GestureResultCallback() {
             @Override
-            public void onCompleted(GestureDescription g) { }
+            public void onCompleted(GestureDescription g) {
+                lastGestureAt = System.currentTimeMillis();
+                lastGestureResult = "tap completed";
+                tapFailStreak = 0;
+            }
 
             @Override
             public void onCancelled(GestureDescription g) {
-                // one silent retry — transient cancels (window transition) happen
-                h.postDelayed(() -> dispatchGesture(g, null, null), 300);
+                // one retry — transient cancels (window transition) happen
+                h.postDelayed(() -> dispatchGesture(g, new GestureResultCallback() {
+                    @Override
+                    public void onCompleted(GestureDescription g2) {
+                        lastGestureAt = System.currentTimeMillis();
+                        lastGestureResult = "tap completed";
+                        tapFailStreak = 0;
+                    }
+
+                    @Override
+                    public void onCancelled(GestureDescription g2) {
+                        lastGestureResult = "tap CANCELLED twice";
+                        tapFailStreak++;
+                        if (tapFailStreak >= 3) gestureBroken = true;
+                    }
+                }, h), 300);
             }
         };
-        return dispatchGesture(gesture, cb, h);
+        boolean accepted = dispatchGesture(gesture, cb, h);
+        if (!accepted) {
+            lastGestureResult = "tap REJECTED by system";
+            tapFailStreak++;
+            if (tapFailStreak >= 3) gestureBroken = true;
+        }
+        return accepted;
     }
 
     private boolean matchesPostLabel(AccessibilityEvent event) {

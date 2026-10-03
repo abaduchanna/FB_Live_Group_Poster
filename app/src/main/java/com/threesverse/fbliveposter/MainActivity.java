@@ -8,6 +8,7 @@ import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
@@ -72,6 +73,19 @@ public class MainActivity extends Activity {
     private boolean darkTheme;
     private boolean syncingUi;
 
+    // v0.6.0 guided setup card + tap-engine probe. The #1 cause of "nothing
+    // clicks at all" turned out to be the accessibility service never actually
+    // turning ON: on Android 13+ a side-loaded app's switch shows "Restricted
+    // setting" and nothing in the old UI explained the workaround.
+    private LinearLayout setupCard;
+    private TextView cardTitle;
+    private TextView cardBody;
+    private Button openA11yButton;
+    private Button openAppInfoButton;
+    private TextView probeRow;
+    private TextView heartbeat;
+    private boolean probeArmed = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         darkTheme = resolveDarkTheme();
@@ -113,6 +127,8 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(24), dp(20), dp(40));
         root.setBackgroundColor(darkTheme ? FB_DARK_BG : FB_LIGHT_BG);
         scroll.addView(root);
+
+        buildSetupCard(root);
 
         TextView title = text("FB Live Group Poster", 26, true);
         title.setTextColor(FB_BLUE);
@@ -240,6 +256,123 @@ public class MainActivity extends Activity {
         String savedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
         if (!savedPackage.isEmpty()) {
             facebookAppStatus.setText("Last used: " + facebookLabel(savedPackage) + " — you will choose again on Start");
+        }
+    }
+
+    // ================= SETUP CARD (v0.6.0) =================
+
+    /** Built once; only text/colors/visibility are updated in refreshStatus,
+     * so nothing is rebuilt under the user's finger while they tap. */
+    private void buildSetupCard(LinearLayout root) {
+        setupCard = new LinearLayout(this);
+        setupCard.setOrientation(LinearLayout.VERTICAL);
+        setupCard.setPadding(dp(14), dp(14), dp(14), dp(14));
+
+        cardTitle = new TextView(this);
+        cardTitle.setTextSize(16);
+        cardTitle.setTypeface(cardTitle.getTypeface(), android.graphics.Typeface.BOLD);
+        cardTitle.setTextColor(Color.rgb(60, 40, 0));
+        setupCard.addView(cardTitle);
+
+        cardBody = new TextView(this);
+        cardBody.setTextSize(13);
+        cardBody.setTextColor(Color.rgb(60, 40, 0));
+        cardBody.setPadding(0, dp(6), 0, 0);
+        setupCard.addView(cardBody);
+
+        openA11yButton = button("Open Accessibility Settings");
+        openA11yButton.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+        setupCard.addView(openA11yButton);
+
+        openAppInfoButton = button("Open App Info (Allow restricted settings)");
+        openAppInfoButton.setOnClickListener(v -> startActivity(new Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:" + getPackageName()))));
+        setupCard.addView(openAppInfoButton);
+
+        probeRow = new TextView(this);
+        probeRow.setText("Run tap-engine self-test");
+        probeRow.setTextSize(15);
+        probeRow.setTypeface(probeRow.getTypeface(), android.graphics.Typeface.BOLD);
+        probeRow.setTextColor(Color.WHITE);
+        probeRow.setGravity(android.view.Gravity.CENTER);
+        probeRow.setPadding(dp(10), dp(14), dp(10), dp(14));
+        probeRow.setBackgroundColor(FB_BLUE);
+        probeRow.setOnClickListener(v -> onProbeClick());
+        setupCard.addView(probeRow);
+
+        heartbeat = new TextView(this);
+        heartbeat.setTextSize(12);
+        heartbeat.setTextColor(Color.rgb(20, 90, 30));
+        heartbeat.setPadding(0, dp(8), 0, 0);
+        setupCard.addView(heartbeat);
+
+        LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+        cardLp.bottomMargin = dp(10);
+        root.addView(setupCard, 0, cardLp);
+    }
+
+    private void renderSetupCard(boolean on) {
+        if (on) {
+            setupCard.setBackgroundColor(Color.rgb(212, 237, 218));
+            cardTitle.setText("Accessibility is ON — automation ready");
+            cardBody.setText("Press the self-test once to confirm that real taps work on this device. Then: paste the link, import/select groups, and press Auto post.");
+            openA11yButton.setVisibility(View.GONE);
+            openAppInfoButton.setVisibility(View.GONE);
+            probeRow.setVisibility(View.VISIBLE);
+            long last = PosterAccessibilityService.lastEventMillis();
+            String hb;
+            if (last == 0L) {
+                hb = "Service connected — waiting for the first screen signal (open Facebook)";
+            } else {
+                long age = (System.currentTimeMillis() - last) / 1000L;
+                hb = age < 20
+                        ? "Connected — receiving screen signals (last " + age + "s ago)"
+                        : "Connected, but no screen signal for " + age + "s — open Facebook";
+            }
+            heartbeat.setText(hb + "\nTap engine: " + PosterAccessibilityService.lastGesture());
+            heartbeat.setVisibility(View.VISIBLE);
+        } else {
+            setupCard.setBackgroundColor(Color.rgb(255, 243, 205));
+            cardTitle.setText("Automation is OFF — the accessibility service is not enabled");
+            cardBody.setText("Nothing can be clicked until it is ON.\n"
+                    + "1. Tap 'Open Accessibility Settings' below\n"
+                    + "2. Find 'FB Live Group Poster' in the list and switch it ON\n"
+                    + "3. If the switch shows 'Restricted setting' (Android 13+):\n"
+                    + "     - Tap 'Open App Info' below\n"
+                    + "     - Menu (3 dots, top-right) - 'Allow restricted settings'\n"
+                    + "     - Go back and repeat step 2");
+            openA11yButton.setVisibility(View.VISIBLE);
+            openAppInfoButton.setVisibility(View.VISIBLE);
+            probeRow.setVisibility(View.GONE);
+            heartbeat.setVisibility(View.GONE);
+        }
+    }
+
+    /** One tap proves the whole chain: service connected, gesture engine
+     * accepted, and the synthetic tap really landed as a click on this row. */
+    private void onProbeClick() {
+        if (probeArmed) {
+            probeArmed = false;
+            PosterAccessibilityService.noteSelfTestHit();
+            probeRow.setText("Self-test PASSED — real-finger taps work on this device");
+            return;
+        }
+        if (!PosterAccessibilityService.isLive()) {
+            Toast.makeText(this, "Service not connected yet — enable the accessibility service, then reopen this app", Toast.LENGTH_LONG).show();
+            return;
+        }
+        int[] loc = new int[2];
+        probeRow.getLocationOnScreen(loc);
+        int x = loc[0] + probeRow.getWidth() / 2;
+        int y = loc[1] + probeRow.getHeight() / 2;
+        probeArmed = true;
+        probeRow.setText("Dispatching test tap...");
+        boolean dispatched = PosterAccessibilityService.requestSelfTest(x, y);
+        if (!dispatched) {
+            probeArmed = false;
+            probeRow.setText("Self-test FAILED — system rejected the tap (fallback clicks will be used)");
         }
     }
 
@@ -629,7 +762,10 @@ public class MainActivity extends Activity {
         // v0.5.0 diagnostics: service state + the mechanism of the last click
         // attempt (touch-tap / a11y-click / long-tap + OK/FAILED + target), so
         // a stalled run is visible on screen instead of "nothing happens".
-        boolean svc = PosterAccessibilityService.isEnabled(this);
+        // v0.6.0: also treat a LIVE-bound service as ON (settings string can
+        // lag on some ROMs), and drive the guided setup card from it.
+        boolean svc = PosterAccessibilityService.isEnabled(this) || PosterAccessibilityService.isLive();
+        renderSetupCard(svc);
         String last = p.getString(CampaignStore.KEY_LAST_CLICK, "");
         String diag = last.length() > 0 ? "\nLast click: " + last : "";
         boolean running = p.getBoolean(CampaignStore.KEY_RUNNING, false);
