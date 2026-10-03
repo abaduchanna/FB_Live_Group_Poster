@@ -88,6 +88,14 @@ public class PosterAccessibilityService extends AccessibilityService {
     // ceiling and the scroll-refusal fallback, so extra patience cannot
     // cause an endless scan (MAX_IMPORT_SCANS stays the hard cap).
     private static final int IDLE_SCANS_TO_STOP = 8;
+    // Facebook's feed can expose thousands of virtual Litho nodes. Accessibility
+    // callbacks run on the app's main thread, so an unlimited walk freezes this
+    // service and Android shows "isn't responding". Every lookup is deliberately
+    // bounded; later accessibility events continue the work on a fresh tree.
+    private static final int MAX_LOOKUP_NODES = 900;
+    private static final long LOOKUP_BUDGET_NS = 18_000_000L;
+    private static final int MAX_COLLECTION_NODES = 2200;
+    private static final long COLLECTION_BUDGET_NS = 35_000_000L;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean processing;
@@ -359,7 +367,10 @@ public class PosterAccessibilityService extends AccessibilityService {
         Deque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
         android.graphics.Rect bounds = new android.graphics.Rect();
-        while (!queue.isEmpty()) {
+        int visited = 0;
+        long deadline = System.nanoTime() + COLLECTION_BUDGET_NS;
+        while (!queue.isEmpty() && visited++ < MAX_COLLECTION_NODES
+                && System.nanoTime() < deadline) {
             AccessibilityNodeInfo node = queue.removeFirst();
             if (maxY >= 0) {
                 node.getBoundsInScreen(bounds);
@@ -573,23 +584,15 @@ public class PosterAccessibilityService extends AccessibilityService {
         long clickedAt = p.getLong(CampaignStore.KEY_GROUPS_CLICKED_AT, 0L);
         if (clickedAt > 0 && System.currentTimeMillis() - clickedAt < 5000L) return;
 
-        // Independent watchdog: ordinary navigation updates STAGE_SINCE on
-        // every retry, so using that clock meant the direct fallback could be
-        // postponed forever. NAV_STARTED_AT is only reset for a new import or
-        // a new target and therefore guarantees both fallbacks actually fire.
         long now = System.currentTimeMillis();
-        long navStartedAt = p.getLong(CampaignStore.KEY_NAV_STARTED_AT, 0L);
-        if (navStartedAt <= 0L) {
-            navStartedAt = now;
-            p.edit().putLong(CampaignStore.KEY_NAV_STARTED_AT, now).apply();
-        }
-        int hubAttempts = p.getInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, 0);
-        long lastHubAt = p.getLong(CampaignStore.KEY_GROUPS_HUB_LAST_AT, 0L);
-        boolean firstDue = hubAttempts == 0 && now - navStartedAt >= 10000L;
-        boolean secondDue = hubAttempts == 1 && now - lastHubAt >= 10000L;
-        if ((firstDue || secondDue) && openGroupsHubFallback(p, hubAttempts)) return;
-
-        boolean menuOpen = onMenuScreen(root);
+        int coordStep = p.getInt(CampaignStore.KEY_COORD_NAV_STEP, 0);
+        long coordTapAt = p.getLong(CampaignStore.KEY_COORD_TAP_AT, 0L);
+        // On the owner's Facebook build the drawer contents become readable,
+        // but the drawer page itself has no reliable accessibility heading.
+        // After our hamburger tap, treat the next 15 seconds as drawer context.
+        boolean coordinateDrawerExpected = coordStep == 2 && coordTapAt > 0L
+                && now - coordTapAt >= 700L && now - coordTapAt < 15000L;
+        boolean menuOpen = onMenuScreen(root) || coordinateDrawerExpected;
         boolean onFeed = !menuOpen && onFeedScreen(root);
         boolean feedTapped = p.getBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false);
 
@@ -646,18 +649,18 @@ public class PosterAccessibilityService extends AccessibilityService {
                     setNavTrace("feedTap=fallback act=feed-verified");
                     return;
                 }
-                if (!stageTimedOutSince(p, 15000L)) return;
-                // v0.6.6: 15s ke baad Feeds tap ko FORCE-accept karo. Warna
-                // feedTapped latch kabhi set nahi hota (FB build jisme Feeds
-                // node hi expose nahi hota) aur neeche wala 12s BACK + reset
-                // loop automation ko FB se bahar nikal deta tha = "app exe
-                // nahi chal rahi". Menu ab unconditional hai (STEP 2), to
-                // feed-tap miss koi deadlock nahi.
-                p.edit()
-                        .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
-                        .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
-                        .apply();
-                setNavTrace("feedTap=forced act=accept-no-feeds-node");
+                // Owner screenshot: this FB build renders Feed as the second
+                // bottom icon but exposes no Feed node. Tap that real icon.
+                if (stageTimedOutSince(p, 1800L) && tapRelative(root, 0.25f, 0.955f, "Feed tab")) {
+                    p.edit()
+                            .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
+                            .putInt(CampaignStore.KEY_COORD_NAV_STEP, 1)
+                            .putLong(CampaignStore.KEY_COORD_TAP_AT, now)
+                            .putLong(CampaignStore.KEY_STAGE_SINCE, now)
+                            .apply();
+                    setNavTrace("feedTap=coord act=feed-bottom");
+                    scheduleProcess(1600L);
+                }
                 return;
             }
 
@@ -714,6 +717,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                         .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, System.currentTimeMillis())
                         .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
                         .putInt(CampaignStore.KEY_SEEMORE_CLICKS, 0)
+                        .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
                         .apply();
                 setNavTrace("menu=1 grp=1 act=groups-click");
                 arriveAtGroupsScreen(p);
@@ -762,61 +766,36 @@ public class PosterAccessibilityService extends AccessibilityService {
             if (menu == null) menu = findByLabels(root, MENU_LABELS, false);
             if (menu != null && isVisibleOnScreen(root, menu)
                     && isBottomNavItem(root, menu) && clickNodeOrParent(menu)) {
-                p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+                p.edit()
+                        .putInt(CampaignStore.KEY_COORD_NAV_STEP, 2)
+                        .putLong(CampaignStore.KEY_COORD_TAP_AT, now)
+                        .putLong(CampaignStore.KEY_STAGE_SINCE, now)
+                        .apply();
                 setNavTrace("act=menu-click");
+                scheduleProcess(1700L);
                 return;
             }
-            setNavTrace("act=menu-miss");
-        }
-
-        // STEP 5: dead-screen recovery after the independent Groups-hub
-        // watchdog above has had its opportunities.
-        if (stageTimedOutSince(p, 12000L)) {
-            AccessibilityNodeInfo menu5 = findByLabels(root, MENU_LABELS, true);
-            if (menu5 == null) menu5 = findByLabels(root, MENU_LABELS, false);
-            if (menu5 == null) {
+            // Owner screenshot: hamburger is visibly top-left (not a hidden
+            // bottom Menu tab), while accessibility exposes neither label.
+            // Use the visible control's relative location, never a deep link.
+            int attempts = p.getInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, 0);
+            if (attempts < 2 && tapRelative(root, 0.065f, 0.065f, "Facebook drawer")) {
                 p.edit()
-                        .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
-                        .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
+                        .putInt(CampaignStore.KEY_COORD_NAV_STEP, 2)
+                        .putLong(CampaignStore.KEY_COORD_TAP_AT, now)
+                        .putInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, attempts + 1)
+                        .putLong(CampaignStore.KEY_STAGE_SINCE, now)
                         .apply();
-                setNavTrace("act=nav-back-reset");
-                performGlobalAction(GLOBAL_ACTION_BACK);
-            } else {
-                setNavTrace("act=menu-blocked-wait");
+                setNavTrace("act=drawer-coordinate#" + (attempts + 1));
+                scheduleProcess(1800L);
+                return;
             }
+            setNavTrace("act=drawer-miss");
         }
-    }
 
-    private boolean openGroupsHubFallback(SharedPreferences p, int attempt) {
-        String selectedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
-        if (selectedPackage.isEmpty()) return false;
-        String webUrl = attempt == 0
-                ? "https://www.facebook.com/groups/feed/"
-                : "https://m.facebook.com/groups/?ref=bookmarks";
-        Uri destination = attempt == 1 && "com.facebook.katana".equals(selectedPackage)
-                ? Uri.parse("fb://facewebmodal/f?href=" + Uri.encode(webUrl))
-                : Uri.parse(webUrl);
-        Intent intent = new Intent(Intent.ACTION_VIEW, destination);
-        intent.setPackage(selectedPackage);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-        try {
-            startActivity(intent);
-            p.edit()
-                    .putInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, attempt + 1)
-                    .putLong(CampaignStore.KEY_GROUPS_HUB_LAST_AT, System.currentTimeMillis())
-                    .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
-                    .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, System.currentTimeMillis())
-                    .apply();
-            setNavTrace("feed=0 menu=none act=groups-hub#" + (attempt + 1));
-            toast("Facebook navigation is hidden — opening Groups directly ("
-                    + (attempt + 1) + "/2)");
-            scheduleProcess(5000L);
-            return true;
-        } catch (Exception unavailable) {
-            p.edit().putInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, attempt + 1).apply();
-            setNavTrace("act=groups-hub-failed#" + (attempt + 1));
-            return false;
-        }
+        // Never press Back or open a URL here: Back exits Facebook on this
+        // layout and direct Groups links can land in Reels. Stay on-screen and
+        // let the next bounded accessibility event retry the visible controls.
     }
 
     /** Owner step 1: feed pe hain? Composer is strongest; selected Feed tab is fallback. */
@@ -925,7 +904,10 @@ public class PosterAccessibilityService extends AccessibilityService {
         List<AccessibilityNodeInfo> found = new ArrayList<>();
         Deque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
-        while (!queue.isEmpty()) {
+        int visited = 0;
+        long deadline = System.nanoTime() + LOOKUP_BUDGET_NS;
+        while (!queue.isEmpty() && visited++ < MAX_LOOKUP_NODES
+                && System.nanoTime() < deadline) {
             AccessibilityNodeInfo node = queue.removeFirst();
             if (node.isScrollable()) found.add(node);
             for (int i = 0; i < node.getChildCount(); i++) {
@@ -1010,9 +992,9 @@ public class PosterAccessibilityService extends AccessibilityService {
                     .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
                     .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
                     .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
-                    .putInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, 0)
-                    .putLong(CampaignStore.KEY_NAV_STARTED_AT, System.currentTimeMillis())
-                    .putLong(CampaignStore.KEY_GROUPS_HUB_LAST_AT, 0L)
+                    .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
+                    .putLong(CampaignStore.KEY_COORD_TAP_AT, 0L)
+                    .putInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, 0)
                     .apply();
             intent = context.getPackageManager().getLaunchIntentForPackage(selectedPackage);
             if (intent == null) {
@@ -1046,7 +1028,10 @@ public class PosterAccessibilityService extends AccessibilityService {
     private AccessibilityNodeInfo findByLabels(AccessibilityNodeInfo root, List<String> labels, boolean exact) {
         Deque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
-        while (!queue.isEmpty()) {
+        int visited = 0;
+        long deadline = System.nanoTime() + LOOKUP_BUDGET_NS;
+        while (!queue.isEmpty() && visited++ < MAX_LOOKUP_NODES
+                && System.nanoTime() < deadline) {
             AccessibilityNodeInfo node = queue.removeFirst();
             String text = node.getText() == null ? "" : node.getText().toString().trim();
             String desc = node.getContentDescription() == null ? "" : node.getContentDescription().toString().trim();
@@ -1068,7 +1053,10 @@ public class PosterAccessibilityService extends AccessibilityService {
     private AccessibilityNodeInfo findEditable(AccessibilityNodeInfo root) {
         Deque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
-        while (!queue.isEmpty()) {
+        int visited = 0;
+        long deadline = System.nanoTime() + LOOKUP_BUDGET_NS;
+        while (!queue.isEmpty() && visited++ < MAX_LOOKUP_NODES
+                && System.nanoTime() < deadline) {
             AccessibilityNodeInfo node = queue.removeFirst();
             if (node.isEditable() || "android.widget.EditText".contentEquals(node.getClassName())) return node;
             for (int i = 0; i < node.getChildCount(); i++) {
@@ -1077,6 +1065,19 @@ public class PosterAccessibilityService extends AccessibilityService {
             }
         }
         return null;
+    }
+
+    /** Tap a control visible at a stable relative location in Facebook's UI. */
+    private boolean tapRelative(AccessibilityNodeInfo root, float xFraction,
+                                float yFraction, String label) {
+        android.graphics.Rect win = new android.graphics.Rect();
+        root.getBoundsInScreen(win);
+        if (win.isEmpty()) return false;
+        int x = win.left + Math.round(win.width() * xFraction);
+        int y = win.top + Math.round(win.height() * yFraction);
+        boolean ok = dispatchTap(x, y, 110);
+        noteClick("coordinate", label, ok);
+        return ok;
     }
 
     // v0.6.0 click engine — tap-FIRST, and it STAYS tap-first.

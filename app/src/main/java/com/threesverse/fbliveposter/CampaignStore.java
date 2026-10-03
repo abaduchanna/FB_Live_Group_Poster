@@ -32,9 +32,9 @@ final class CampaignStore {
     static final String KEY_LAST_CLICK = "last_click";         // v0.5.0: diagnostics "mode:label" of the last click attempt
     static final String KEY_GROUPS_CLICKED_AT = "groups_clicked_at"; // v0.6.2: debounce after clicking drawer "Groups" (screen render wait)
     static final String KEY_SEEMORE_CLICKS = "seemore_clicks"; // v0.6.3: cap drawer "See more" clicks per drawer session (anti infinite-loop)
-    static final String KEY_GROUPS_HUB_ATTEMPTS = "groups_hub_attempts"; // fallback when FB exposes no Feed/Menu nodes
-    static final String KEY_NAV_STARTED_AT = "nav_started_at"; // never reset by ordinary Feed/Menu retries
-    static final String KEY_GROUPS_HUB_LAST_AT = "groups_hub_last_at";
+    static final String KEY_COORD_NAV_STEP = "coord_nav_step"; // 0=none, 1=Feed tapped, 2=drawer tapped
+    static final String KEY_COORD_TAP_AT = "coord_tap_at";
+    static final String KEY_DRAWER_TAP_ATTEMPTS = "drawer_tap_attempts";
 
     static final String STAGE_OPEN_GROUP = "open_group";
     static final String STAGE_NAV_GROUPS = "nav_groups";    // find + tap the Groups entry inside Facebook
@@ -192,9 +192,9 @@ final class CampaignStore {
                 .putBoolean(KEY_NAV_FEEDS_DONE, false)
                 .putLong(KEY_GROUPS_CLICKED_AT, 0L)
                 .putInt(KEY_SEEMORE_CLICKS, 0)
-                .putInt(KEY_GROUPS_HUB_ATTEMPTS, 0)
-                .putLong(KEY_NAV_STARTED_AT, 0L)
-                .putLong(KEY_GROUPS_HUB_LAST_AT, 0L)
+                .putInt(KEY_COORD_NAV_STEP, 0)
+                .putLong(KEY_COORD_TAP_AT, 0L)
+                .putInt(KEY_DRAWER_TAP_ATTEMPTS, 0)
                 .apply();
     }
 }

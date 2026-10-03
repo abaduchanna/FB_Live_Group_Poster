@@ -756,9 +756,9 @@ public class MainActivity extends Activity {
                 .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
                 .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, 0L)
                 .putInt(CampaignStore.KEY_SEEMORE_CLICKS, 0)
-                .putInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, 0)
-                .putLong(CampaignStore.KEY_NAV_STARTED_AT, System.currentTimeMillis())
-                .putLong(CampaignStore.KEY_GROUPS_HUB_LAST_AT, 0L)
+                .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
+                .putLong(CampaignStore.KEY_COORD_TAP_AT, 0L)
+                .putInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, 0)
                 .apply();
 
         facebookAppStatus.setText("Import app: " + facebookLabel(packageName));
@@ -799,9 +799,9 @@ public class MainActivity extends Activity {
                 .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
                 .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, 0L)
                 .putInt(CampaignStore.KEY_SEEMORE_CLICKS, 0)
-                .putInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, 0)
-                .putLong(CampaignStore.KEY_NAV_STARTED_AT, now)
-                .putLong(CampaignStore.KEY_GROUPS_HUB_LAST_AT, 0L)
+                .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
+                .putLong(CampaignStore.KEY_COORD_TAP_AT, 0L)
+                .putInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, 0)
                 .apply();
 
         facebookAppStatus.setText("Facebook app: " + facebookLabel(facebookPackage));
