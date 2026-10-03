@@ -1,3 +1,5 @@
+import java.util.Base64
+
 plugins {
     id("com.android.application")
 }
@@ -21,7 +23,7 @@ android {
             val ksB64 = System.getenv("FB_KEYSTORE_B64")
             if (ksB64 != null) {
                 val tmp = File.createTempFile("fbposter", ".keystore")
-                tmp.writeBytes(java.util.Base64.getDecoder().decode(ksB64))
+                tmp.writeBytes(Base64.getDecoder().decode(ksB64))
                 tmp.deleteOnExit()
                 storeFile = tmp
                 storePassword = System.getenv("FB_STORE_PASS")
