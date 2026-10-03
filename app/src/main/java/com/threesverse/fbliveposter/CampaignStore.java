@@ -29,6 +29,7 @@ final class CampaignStore {
     static final String KEY_IMPORT_MODE = "import_mode";
     static final String KEY_IMPORT_RESULT = "import_result_json";
     static final String KEY_NAV_FEEDS_DONE = "nav_feeds_done"; // v0.4.4: Feeds→drawer→Groups flow step
+    static final String KEY_LAST_CLICK = "last_click";         // v0.5.0: diagnostics "mode:label" of the last click attempt
 
     static final String STAGE_OPEN_GROUP = "open_group";
     static final String STAGE_NAV_GROUPS = "nav_groups";    // find + tap the Groups entry inside Facebook

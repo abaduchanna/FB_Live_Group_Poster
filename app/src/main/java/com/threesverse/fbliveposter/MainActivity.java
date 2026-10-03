@@ -49,6 +49,16 @@ public class MainActivity extends Activity {
             "com.facebook.appmanager", "com.facebook.system", "com.facebook.katana.proxy"
     );
 
+    /** v0.5.0: keeps the status line live (service state + last click diagnostics). */
+    private final android.os.Handler statusRefresher = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable statusTick = new Runnable() {
+        @Override
+        public void run() {
+            refreshStatus();
+            statusRefresher.postDelayed(this, 2000);
+        }
+    };
+
     private EditText linkInput;
     private EditText messageInput;
     private EditText delayInput;
@@ -86,6 +96,14 @@ public class MainActivity extends Activity {
         mergeImportResult();
         rebuildGroupList();
         refreshStatus();
+        statusRefresher.removeCallbacks(statusTick);
+        statusRefresher.postDelayed(statusTick, 2000);
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        statusRefresher.removeCallbacks(statusTick);
     }
 
     private void buildUi() {
@@ -608,17 +626,28 @@ public class MainActivity extends Activity {
     private void refreshStatus() {
         if (status == null) return;
         SharedPreferences p = CampaignStore.prefs(this);
+        // v0.5.0 diagnostics: service state + the mechanism of the last click
+        // attempt (touch-tap / a11y-click / long-tap + OK/FAILED + target), so
+        // a stalled run is visible on screen instead of "nothing happens".
+        boolean svc = PosterAccessibilityService.isEnabled(this);
+        String last = p.getString(CampaignStore.KEY_LAST_CLICK, "");
+        String diag = last.length() > 0 ? "\nLast click: " + last : "";
         boolean running = p.getBoolean(CampaignStore.KEY_RUNNING, false);
         boolean importing = p.getBoolean(CampaignStore.KEY_IMPORT_MODE, false);
+        String base;
         if (importing) {
-            status.setText("Status: scanning groups from Facebook…");
-            return;
+            base = "Status: scanning groups from Facebook…";
+        } else {
+            int index = p.getInt(CampaignStore.KEY_INDEX, 0);
+            int total = CampaignStore.selectedTargets(this).size();
+            base = running
+                    ? "Running: group " + Math.min(index + 1, total) + " of " + total
+                    : "Status: stopped / ready";
         }
-        int index = p.getInt(CampaignStore.KEY_INDEX, 0);
-        int total = CampaignStore.selectedTargets(this).size();
-        status.setText(running
-                ? "Running: group " + Math.min(index + 1, total) + " of " + total
-                : "Status: stopped / ready");
+        status.setText((svc
+                ? "Accessibility: ON"
+                : "Accessibility: OFF — tap 'Enable Accessibility service' below first")
+                + "\n" + base + diag);
     }
 
     private String compactUrl(String url) {

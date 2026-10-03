@@ -681,18 +681,41 @@ public class PosterAccessibilityService extends AccessibilityService {
         return null;
     }
 
-    // v0.4.7 (owner: clicks STILL dead on v0.4.6): INVERTED strategy.
-    // Facebook's Litho/custom rows report isClickable()=true and even ACCEPT
-    // performAction(ACTION_CLICK) — returning true while the screen never
-    // changes (they listen to raw touches, not accessibility clicks). The
-    // v0.4.6 a11y-click-first order therefore "succeeded" and the gesture-tap
-    // fallback never ran. A dispatched finger tap at the element's on-screen
-    // center is indistinguishable from a human touch and works on every view
-    // implementation, so tap FIRST now; the a11y click is only a fallback for
-    // the rare case the system rejects the gesture (another gesture in
-    // progress, screen state change).
+    // v0.5.0 (owner: "koi bhi click nahi kar raha" on v0.4.9): ADAPTIVE engine.
+    // History: v0.4.6 a11y-click-first — Litho rows accepted ACTION_CLICK but
+    // nothing happened. v0.4.7/v0.4.9 tap-first — on the owner's device SOME
+    // ROMs dispatch accessibility gestures unreliably, so now NOTHING clicked.
+    // There is no single mechanism that works on every device/FB version, so
+    // consecutive click attempts CYCLE through three mechanisms:
+    //   0) 110ms touch tap (fallback: a11y click if the gesture is rejected)
+    //   1) a11y ACTION_CLICK walk (fallback: touch tap)
+    //   2) 220ms touch tap (still below the ~400ms long-press threshold;
+    //      fallback: a11y click)
+    // An element that does not respond keeps getting the next mechanism on the
+    // following tick, so whichever path the device supports is found within
+    // ~3 attempts. The last attempt is recorded for the in-app status line.
+    private static int clickMode = 0;
+
     private boolean clickNodeOrParent(AccessibilityNodeInfo node) {
-        if (tapCenter(node, 3)) return true;
+        String label = safeLabel(node);
+        int mode = Math.floorMod(clickMode++, 3);
+        boolean ok;
+        switch (mode) {
+            case 0:
+                ok = tapCenter(node, 3, 110) || clickA11y(node);
+                break;
+            case 1:
+                ok = clickA11y(node) || tapCenter(node, 3, 110);
+                break;
+            default:
+                ok = tapCenter(node, 3, 220) || clickA11y(node);
+                break;
+        }
+        noteClick(mode, label, ok);
+        return ok;
+    }
+
+    private boolean clickA11y(AccessibilityNodeInfo node) {
         AccessibilityNodeInfo current = node;
         for (int i = 0; current != null && i < 5; i++) {
             if (current.isClickable() && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
@@ -701,12 +724,32 @@ public class PosterAccessibilityService extends AccessibilityService {
         return false;
     }
 
+    private String safeLabel(AccessibilityNodeInfo node) {
+        CharSequence t = node.getText();
+        CharSequence d = node.getContentDescription();
+        String s = t != null && t.length() > 0 ? t.toString() : (d != null ? d.toString() : "");
+        s = s.trim().replace('\n', ' ');
+        if (s.length() > 20) s = s.substring(0, 20);
+        return s;
+    }
+
+    private void noteClick(int mode, String label, boolean ok) {
+        String modeName = mode == 0 ? "touch-tap" : (mode == 1 ? "a11y-click" : "long-tap");
+        try {
+            CampaignStore.prefs(this).edit()
+                    .putString(CampaignStore.KEY_LAST_CLICK,
+                            modeName + (ok ? " OK: " : " FAILED: ") + label)
+                    .apply();
+        } catch (Exception ignored) {
+        }
+    }
+
     /**
      * Dispatch a real touch tap at the visible center of the node. If the node
      * has no usable on-screen bounds (collapsed/zero-size), walk up a few
      * parents. Returns true only if the system accepted the gesture.
      */
-    private boolean tapCenter(AccessibilityNodeInfo node, int hops) {
+    private boolean tapCenter(AccessibilityNodeInfo node, int hops, int durationMs) {
         android.graphics.Rect clip = new android.graphics.Rect();
         AccessibilityNodeInfo root = getRootInActiveWindow();
         if (root != null) root.getBoundsInScreen(clip);
@@ -719,7 +762,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                 continue;
             }
             if (r.width() > 8 && r.height() > 8) {
-                return dispatchTap(r.centerX(), r.centerY());
+                return dispatchTap(r.centerX(), r.centerY(), durationMs);
             }
             cur = cur.getParent();
         }
@@ -727,16 +770,15 @@ public class PosterAccessibilityService extends AccessibilityService {
     }
 
     /**
-     * ~110ms finger tap — FB's gesture detectors are happier with a slightly
-     * longer stroke than the 60ms used by v0.4.6. If the system CANCELS the
-     * gesture (overlapping gesture, window transition), retry once after 300ms.
+     * Finger tap of the given duration. If the system CANCELS the gesture
+     * (overlapping gesture, window transition), retry once after 300ms.
      */
-    private boolean dispatchTap(int x, int y) {
+    private boolean dispatchTap(int x, int y, int durationMs) {
         android.graphics.Path pt = new android.graphics.Path();
         pt.moveTo(x, y);
         pt.lineTo(x, y);
         final GestureDescription gesture = new GestureDescription.Builder()
-                .addStroke(new GestureDescription.StrokeDescription(pt, 0, 110))
+                .addStroke(new GestureDescription.StrokeDescription(pt, 0, durationMs))
                 .build();
         final Handler h = new Handler(Looper.getMainLooper());
         GestureResultCallback cb = new GestureResultCallback() {
