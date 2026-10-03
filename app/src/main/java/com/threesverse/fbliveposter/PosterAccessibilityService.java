@@ -573,6 +573,22 @@ public class PosterAccessibilityService extends AccessibilityService {
         long clickedAt = p.getLong(CampaignStore.KEY_GROUPS_CLICKED_AT, 0L);
         if (clickedAt > 0 && System.currentTimeMillis() - clickedAt < 5000L) return;
 
+        // Independent watchdog: ordinary navigation updates STAGE_SINCE on
+        // every retry, so using that clock meant the direct fallback could be
+        // postponed forever. NAV_STARTED_AT is only reset for a new import or
+        // a new target and therefore guarantees both fallbacks actually fire.
+        long now = System.currentTimeMillis();
+        long navStartedAt = p.getLong(CampaignStore.KEY_NAV_STARTED_AT, 0L);
+        if (navStartedAt <= 0L) {
+            navStartedAt = now;
+            p.edit().putLong(CampaignStore.KEY_NAV_STARTED_AT, now).apply();
+        }
+        int hubAttempts = p.getInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, 0);
+        long lastHubAt = p.getLong(CampaignStore.KEY_GROUPS_HUB_LAST_AT, 0L);
+        boolean firstDue = hubAttempts == 0 && now - navStartedAt >= 10000L;
+        boolean secondDue = hubAttempts == 1 && now - lastHubAt >= 10000L;
+        if ((firstDue || secondDue) && openGroupsHubFallback(p, hubAttempts)) return;
+
         boolean menuOpen = onMenuScreen(root);
         boolean onFeed = !menuOpen && onFeedScreen(root);
         boolean feedTapped = p.getBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false);
@@ -753,14 +769,9 @@ public class PosterAccessibilityService extends AccessibilityService {
             setNavTrace("act=menu-miss");
         }
 
-        // STEP 5: some FB/Lite builds expose neither Feed nor Menu in their
-        // accessibility tree (confirmed by live trace: feed=0 feeds=none).
-        // After the visible-navigation attempt, open the same Groups hub in
-        // the user-selected Facebook package instead of waiting forever.
+        // STEP 5: dead-screen recovery after the independent Groups-hub
+        // watchdog above has had its opportunities.
         if (stageTimedOutSince(p, 12000L)) {
-            int hubAttempts = p.getInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, 0);
-            if (hubAttempts < 2 && openGroupsHubFallback(p, hubAttempts)) return;
-
             AccessibilityNodeInfo menu5 = findByLabels(root, MENU_LABELS, true);
             if (menu5 == null) menu5 = findByLabels(root, MENU_LABELS, false);
             if (menu5 == null) {
@@ -779,20 +790,26 @@ public class PosterAccessibilityService extends AccessibilityService {
     private boolean openGroupsHubFallback(SharedPreferences p, int attempt) {
         String selectedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
         if (selectedPackage.isEmpty()) return false;
-        String url = attempt == 0
+        String webUrl = attempt == 0
                 ? "https://www.facebook.com/groups/feed/"
                 : "https://m.facebook.com/groups/?ref=bookmarks";
-        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        Uri destination = attempt == 1 && "com.facebook.katana".equals(selectedPackage)
+                ? Uri.parse("fb://facewebmodal/f?href=" + Uri.encode(webUrl))
+                : Uri.parse(webUrl);
+        Intent intent = new Intent(Intent.ACTION_VIEW, destination);
         intent.setPackage(selectedPackage);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
         try {
             startActivity(intent);
             p.edit()
                     .putInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, attempt + 1)
+                    .putLong(CampaignStore.KEY_GROUPS_HUB_LAST_AT, System.currentTimeMillis())
                     .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
                     .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, System.currentTimeMillis())
                     .apply();
             setNavTrace("feed=0 menu=none act=groups-hub#" + (attempt + 1));
+            toast("Facebook navigation is hidden — opening Groups directly ("
+                    + (attempt + 1) + "/2)");
             scheduleProcess(5000L);
             return true;
         } catch (Exception unavailable) {
@@ -993,6 +1010,9 @@ public class PosterAccessibilityService extends AccessibilityService {
                     .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
                     .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
                     .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
+                    .putInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, 0)
+                    .putLong(CampaignStore.KEY_NAV_STARTED_AT, System.currentTimeMillis())
+                    .putLong(CampaignStore.KEY_GROUPS_HUB_LAST_AT, 0L)
                     .apply();
             intent = context.getPackageManager().getLaunchIntentForPackage(selectedPackage);
             if (intent == null) {
