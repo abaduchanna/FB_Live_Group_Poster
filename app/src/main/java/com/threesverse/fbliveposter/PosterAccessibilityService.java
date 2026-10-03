@@ -753,11 +753,14 @@ public class PosterAccessibilityService extends AccessibilityService {
             setNavTrace("act=menu-miss");
         }
 
-        // STEP 5: dead screen reset — v0.6.6: BACK sirf tab jab Menu node
-        // KAHIN HI NA ho (bilkul unknown screen). Menu node MILA magar guards
-        // ne block kiya to BACK NAHI — BACK feed/FB se bahar nikal deta tha;
-        // wait karo aur trace me dikhao.
+        // STEP 5: some FB/Lite builds expose neither Feed nor Menu in their
+        // accessibility tree (confirmed by live trace: feed=0 feeds=none).
+        // After the visible-navigation attempt, open the same Groups hub in
+        // the user-selected Facebook package instead of waiting forever.
         if (stageTimedOutSince(p, 12000L)) {
+            int hubAttempts = p.getInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, 0);
+            if (hubAttempts < 2 && openGroupsHubFallback(p, hubAttempts)) return;
+
             AccessibilityNodeInfo menu5 = findByLabels(root, MENU_LABELS, true);
             if (menu5 == null) menu5 = findByLabels(root, MENU_LABELS, false);
             if (menu5 == null) {
@@ -770,6 +773,32 @@ public class PosterAccessibilityService extends AccessibilityService {
             } else {
                 setNavTrace("act=menu-blocked-wait");
             }
+        }
+    }
+
+    private boolean openGroupsHubFallback(SharedPreferences p, int attempt) {
+        String selectedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
+        if (selectedPackage.isEmpty()) return false;
+        String url = attempt == 0
+                ? "https://www.facebook.com/groups/feed/"
+                : "https://m.facebook.com/groups/?ref=bookmarks";
+        Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+        intent.setPackage(selectedPackage);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+        try {
+            startActivity(intent);
+            p.edit()
+                    .putInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, attempt + 1)
+                    .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                    .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, System.currentTimeMillis())
+                    .apply();
+            setNavTrace("feed=0 menu=none act=groups-hub#" + (attempt + 1));
+            scheduleProcess(5000L);
+            return true;
+        } catch (Exception unavailable) {
+            p.edit().putInt(CampaignStore.KEY_GROUPS_HUB_ATTEMPTS, attempt + 1).apply();
+            setNavTrace("act=groups-hub-failed#" + (attempt + 1));
+            return false;
         }
     }
 
