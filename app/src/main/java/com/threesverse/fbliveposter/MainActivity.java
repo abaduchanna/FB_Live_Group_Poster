@@ -832,7 +832,7 @@ public class MainActivity extends Activity {
                     ? "Running: group " + Math.min(index + 1, total) + " of " + total
                     : "Status: stopped / ready";
         }
-        status.setText((svc
+        status.setText(((settingsOn || live)
                 ? "Accessibility: ON"
                 : "Accessibility: OFF — tap 'Enable Accessibility service' below first")
                 + "\n" + base + diag);
