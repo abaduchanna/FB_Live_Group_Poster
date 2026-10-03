@@ -15,8 +15,9 @@ android {
         applicationId = "com.threesverse.liveposter"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "0.6.6"
+        versionCode = 22
+        versionName = "0.6.7"
+        manifestPlaceholders["appName"] = "FB Live Group Poster"
     }
 
     signingConfigs {
@@ -42,6 +43,12 @@ android {
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = if (System.getenv("FB_KEYSTORE_B64") != null)
                 signingConfigs.getByName("release") else signingConfigs.getByName("debug")
+        }
+        create("fresh") {
+            initWith(getByName("release"))
+            applicationIdSuffix = ".fresh"
+            versionNameSuffix = "-fresh"
+            manifestPlaceholders["appName"] = "FB Live Group Poster Fresh"
         }
     }
 }

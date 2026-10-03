@@ -21,8 +21,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: "8.9"
-      - name: Build signed release APK (stable keystore)
-        run: gradle assembleRelease lint
+      - name: Build signed release APKs (stable keystore)
+        run: gradle assembleRelease assembleFresh lint
         env:
           FB_KEYSTORE_B64: ${{ secrets.FB_KEYSTORE_B64 }}
           FB_STORE_PASS: ${{ secrets.FB_STORE_PASS }}
@@ -39,6 +39,8 @@ jobs:
           mkdir rel
           cp app/build/outputs/apk/release/FB_Live_Group_Poster-release.apk \
              "rel/FB_Live_Group_Poster-v${VERSION}.apk"
+          cp app/build/outputs/apk/fresh/FB_Live_Group_Poster-fresh.apk \
+             "rel/FB_Live_Group_Poster-FreshInstall-v${VERSION}.apk"
           ls -la rel/
 
       - name: Attach APK to release
@@ -52,6 +54,11 @@ jobs:
           body: |
             FB Live Group Poster Android app (side-load).
 
+            - Normal APK: upgrades compatible release-signed installations.
+            - FreshInstall APK: separate package identity for phones showing
+              "App not installed" because an older/debug signature conflicts.
+              Enable the accessibility service again after a fresh install.
+
             v0.4.7 is release-signed — older DEBUG builds (up to v0.4.6) must be
             uninstalled once before installing; every later version then
             installs right over (same signature).
@@ -59,4 +66,6 @@ jobs:
             If Google Play Protect blocks the install: Play Store > profile icon
             > Play Protect > gear icon > turn OFF "Scan apps with Play
             Protect", install, then turn it back ON.
-          files: rel/FB_Live_Group_Poster-v${{ env.VERSION }}.apk
+          files: |
+            rel/FB_Live_Group_Poster-v${{ env.VERSION }}.apk
+            rel/FB_Live_Group_Poster-FreshInstall-v${{ env.VERSION }}.apk

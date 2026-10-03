@@ -21,7 +21,7 @@
     <application
         android:allowBackup="true"
         android:icon="@drawable/ic_launcher"
-        android:label="FB Live Group Poster"
+        android:label="${appName}"
         android:roundIcon="@drawable/ic_launcher"
         android:supportsRtl="true"
         android:theme="@style/AppThemeLight">
@@ -45,7 +45,7 @@
             android:description="@string/accessibility_description"
             android:exported="false"
             android:foregroundServiceType="specialUse"
-            android:label="FB Live Group Poster"
+            android:label="${appName}"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
