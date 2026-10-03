@@ -48,7 +48,13 @@ public class PosterAccessibilityService extends AccessibilityService {
     // Side drawer / Menu tab page khula hone ka signal — ye items sirf Menu
     // screen pe hote hain (feed posts pe kabhi nahi).
     private static final List<String> MENU_SCREEN_HINTS = Arrays.asList(
-            "Settings & privacy", "Help & support", "Log out", "All shortcuts");
+            "Settings & privacy", "Help & support", "Log out", "All shortcuts",
+            // v0.6.3: on some FB builds the items above sit BELOW the fold of
+            // the drawer — without extra hints menuOpen() false-negatived,
+            // the drawer was treated as "closed" and the navigator re-tapped
+            // Menu (closing it) in an open/close loop. Memories/Saved are
+            // drawer/Menu-only items, never on the feed.
+            "Memories", "Saved");
     // "Your groups" tab ki list ke akhir me FB "Suggested for you" dikhata hai — ye
     // bottom ka natural signal hai; suggested junk groups import hone se pehle ruk jate hain.
     private static final List<String> SUGGESTED_LABELS = Arrays.asList("Suggested for you", "Suggested groups");
@@ -100,6 +106,13 @@ public class PosterAccessibilityService extends AccessibilityService {
     volatile static String lastGestureResult = "";
     private static int tapFailStreak = 0;
     private static boolean gestureBroken = false;
+
+    // v0.6.3 navigation trace — updated on every navigateTowardGroups tick.
+    // Same-process read by the MainActivity status line: a report like
+    // "drawer opens but Groups is never found" is now diagnosable from ONE
+    // screenshot (menu= / grp= / sMore= / smN= / act= show the exact stuck
+    // step and what the navigator decided to do about it).
+    volatile static String lastNavTrace = "";
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
@@ -495,13 +508,19 @@ public class PosterAccessibilityService extends AccessibilityService {
         }
     }
 
-    // Owner workflow v0.6.2 — STRICT, no shortcuts (owner: "kitni baar workflow batau"):
+    // Owner workflow v0.6.2/v0.6.3 — STRICT, no shortcuts (owner: "kitni baar workflow batau"):
     //   1) FB khulte hi check: feed pe hain ya nahi (composer hint = feed)
     //   2) Drawer/Menu kholo
     //   3) Drawer me PEHLE "See more" click (Groups collapsed/hidden hota hai)
     //   4) Phir "Groups" entry click
     //   5) Groups screen: "Your groups" tab click
     //   6) Scroll + scan
+    // v0.6.3 (owner: "drawer khol raha hai groups nahi mil raha"): the
+    // menuOpen branch is now DEADLOCK-FREE. Groups VISIBLE = "See more" has
+    // already done its reveal job, so Groups is clicked in the same tick;
+    // "See more" itself is capped at 2 clicks per drawer session, so a no-op
+    // click on a wrong "See all" node can no longer starve the Groups step
+    // forever (the old code returned after EVERY See-more click).
     // The old STEP 0 (click the first exact "Groups" node anywhere) is GONE:
     // the feed's top chips contain a "Groups" chip that opens the Groups
     // FEED (not the list), and BFS also matches off-screen drawer nodes —
@@ -514,10 +533,17 @@ public class PosterAccessibilityService extends AccessibilityService {
         if (clickedAt > 0 && System.currentTimeMillis() - clickedAt < 5000L) return;
 
         boolean menuOpen = onMenuScreen(root);
+        boolean onFeed = !menuOpen && onFeedScreen(root);
+
+        // v0.6.3 anti-loop: drawer band hote hi See-more session counter reset
+        // (naya drawer session = phir se 2 See-more clicks ki allowance).
+        if (!menuOpen && p.getInt(CampaignStore.KEY_SEEMORE_CLICKS, 0) != 0) {
+            p.edit().putInt(CampaignStore.KEY_SEEMORE_CLICKS, 0).apply();
+        }
 
         // STEP 1: ensure we are on the feed first (owner step 1).
         if (!menuOpen) {
-            if (onFeedScreen(root)) {
+            if (onFeed) {
                 if (!p.getBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)) {
                     p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
                             .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
@@ -538,45 +564,75 @@ public class PosterAccessibilityService extends AccessibilityService {
         }
 
         if (menuOpen) {
-            // STEP 3 (owner: "see more ko pehle click karna hai"): the drawer
-            // hides Groups behind "See more" until it is expanded. Visibility
-            // guard: BFS also returns off-screen nodes from the collapsed
-            // drawer — never tap those.
-            AccessibilityNodeInfo seeMore = findByLabels(root, SEE_MORE_LABELS, true);
-            if (seeMore != null && isVisibleOnScreen(root, seeMore)
-                    && stageTimedOutSince(p, 2500L) && clickNodeOrParent(seeMore)) {
-                p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
-                return;
-            }
-            // STEP 4 (owner: "phir groups ko click karna hai") — only a
-            // Groups entry that is actually RENDERED on screen right now.
+            // STEP 4 (owner: "phir groups ko click karna hai") — FIRST, and
+            // only a Groups entry that is actually RENDERED on screen right
+            // now. v0.6.3: Groups pehle check hota hai kyunki Groups visible
+            // hone ka matlab hai "See more" reveal already done — agar is ke
+            // baad bhi har tick pehle See-more click + return karte to wo
+            // click no-op ya galat node pe hote to Groups KABHI try nahi hota
+            // (owner ka exact reported loop).
             AccessibilityNodeInfo groups = findByLabels(root, GROUPS_LABELS, true);
-            if (groups != null && isVisibleOnScreen(root, groups)
-                    && stageTimedOutSince(p, 1500L) && clickNodeOrParent(groups)) {
+            boolean groupsVisible = groups != null && isVisibleOnScreen(root, groups);
+            if (groupsVisible && stageTimedOutSince(p, 1500L) && clickNodeOrParent(groups)) {
                 p.edit()
                         .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, System.currentTimeMillis())
                         .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
+                        .putInt(CampaignStore.KEY_SEEMORE_CLICKS, 0)
                         .apply();
+                setNavTrace("menu=1 grp=1 act=groups-click");
                 arriveAtGroupsScreen(p);
+                return;
+            }
+            // STEP 3 (owner: "see more ko pehle click karna hai"): Groups abhi
+            // hidden hai — drawer expand karo. Visibility guard: BFS also
+            // returns off-screen nodes from the collapsed drawer — never tap
+            // those. CAP = 2 clicks per drawer session: do no-op clicks ke
+            // baad hum scroll + Groups-search karte rahenge, See-more pe
+            // hamesha ke liye stuck nahi honge.
+            int smClicks = p.getInt(CampaignStore.KEY_SEEMORE_CLICKS, 0);
+            AccessibilityNodeInfo seeMore =
+                    smClicks < 2 ? findByLabels(root, SEE_MORE_LABELS, true) : null;
+            boolean smVisible = seeMore != null && isVisibleOnScreen(root, seeMore);
+            if (smVisible && stageTimedOutSince(p, 2500L) && clickNodeOrParent(seeMore)) {
+                p.edit()
+                        .putInt(CampaignStore.KEY_SEEMORE_CLICKS, smClicks + 1)
+                        .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                        .apply();
+                setNavTrace("menu=1 grp=" + (groupsVisible ? 1 : 0)
+                        + " act=see-more#" + (smClicks + 1));
                 return;
             }
             // STEP 4b: expanded drawer me Groups abhi bhi fold ke neeche hai —
             // drawer scroll karo.
-            if (stageTimedOutSince(p, 2500L) && scrollForward(root)) {
-                p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+            boolean scrolled = false;
+            if (stageTimedOutSince(p, 2500L)) {
+                scrolled = scrollForward(root);
+                if (scrolled) {
+                    p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+                }
             }
+            setNavTrace("menu=1 grp=" + (groupsVisible ? 1 : 0)
+                    + " sMore=" + (smVisible ? 1 : 0) + " smN=" + smClicks
+                    + (scrolled ? " act=drawer-scroll" : " act=drawer-wait"));
             return;
         }
 
         // STEP 2: side drawer kholo (Menu tab / hamburger) — rate-limited
-        // (double-tap drawer band kar deta).
+        // (double-tap drawer band kar deta). v0.6.3 guard: sirf BOTTOM-NAV
+        // wala "Menu" tap karo (screen ke bottom 25%). BFS drawer ke andar ke
+        // "Menu" text / off-screen bottom-nav node bhi utha leta hai — us ka
+        // tap drawer band kar deta tha (open/close loop).
         if (stageTimedOutSince(p, 2500L)) {
             AccessibilityNodeInfo menu = findByLabels(root, MENU_LABELS, true);
             if (menu == null) menu = findByLabels(root, MENU_LABELS, false);
-            if (menu != null && clickNodeOrParent(menu)) {
+            if (menu != null && isBottomNavItem(root, menu) && clickNodeOrParent(menu)) {
                 p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+                setNavTrace("feed=" + (onFeed ? 1 : 0) + " act=menu-click");
                 return;
             }
+            setNavTrace("feed=" + (onFeed ? 1 : 0) + " menu-node="
+                    + (menu == null ? "none" : (isBottomNavItem(root, menu) ? "bottom" : "not-bottom"))
+                    + " act=menu-miss");
         }
 
         // STEP 5: dead screen (drawer open twice, stray dialog…) — BACK resets
@@ -584,6 +640,7 @@ public class PosterAccessibilityService extends AccessibilityService {
         // out the whole stage timeout.
         if (stageTimedOutSince(p, 12000L)) {
             p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+            setNavTrace("act=nav-back-reset");
             performGlobalAction(GLOBAL_ACTION_BACK);
         }
     }
@@ -625,6 +682,26 @@ public class PosterAccessibilityService extends AccessibilityService {
 
     private boolean onMenuScreen(AccessibilityNodeInfo root) {
         return findByLabels(root, MENU_SCREEN_HINTS, false) != null;
+    }
+
+    /** v0.6.3 bottom-nav guard: the Menu TAB lives in the bottom 25% of the
+     * screen. Any other "Menu" node (drawer header text, off-screen node whose
+     * stale bounds sit elsewhere) must NOT be tapped — tapping it closed the
+     * freshly opened drawer and the navigator looped open/close forever.
+     * Fail-open when window bounds are unavailable (same behavior as before). */
+    private boolean isBottomNavItem(AccessibilityNodeInfo root, AccessibilityNodeInfo node) {
+        android.graphics.Rect win = new android.graphics.Rect();
+        root.getBoundsInScreen(win);
+        if (win.isEmpty()) return true;
+        android.graphics.Rect r = new android.graphics.Rect();
+        node.getBoundsInScreen(r);
+        int cy = r.centerY();
+        return cy >= win.top + (int) (win.height() * 0.75) && cy <= win.bottom;
+    }
+
+    /** v0.6.3 live navigation trace (see lastNavTrace). */
+    private static void setNavTrace(String s) {
+        lastNavTrace = s;
     }
 
     private AccessibilityNodeInfo findGroupRow(AccessibilityNodeInfo root, String name) {
@@ -884,6 +961,11 @@ public class PosterAccessibilityService extends AccessibilityService {
 
     static String lastGesture() {
         return lastGestureResult.isEmpty() ? "not tested yet" : lastGestureResult;
+    }
+
+    /** v0.6.3: last navigation-tick decision, shown on the app status line. */
+    static String navTrace() {
+        return lastNavTrace;
     }
 
     /** v0.6.0 self-test: MainActivity asks the service to tap a point inside

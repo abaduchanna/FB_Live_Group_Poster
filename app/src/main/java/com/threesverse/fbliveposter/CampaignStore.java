@@ -31,6 +31,7 @@ final class CampaignStore {
     static final String KEY_NAV_FEEDS_DONE = "nav_feeds_done"; // v0.4.4: Feeds→drawer→Groups flow step
     static final String KEY_LAST_CLICK = "last_click";         // v0.5.0: diagnostics "mode:label" of the last click attempt
     static final String KEY_GROUPS_CLICKED_AT = "groups_clicked_at"; // v0.6.2: debounce after clicking drawer "Groups" (screen render wait)
+    static final String KEY_SEEMORE_CLICKS = "seemore_clicks"; // v0.6.3: cap drawer "See more" clicks per drawer session (anti infinite-loop)
 
     static final String STAGE_OPEN_GROUP = "open_group";
     static final String STAGE_NAV_GROUPS = "nav_groups";    // find + tap the Groups entry inside Facebook

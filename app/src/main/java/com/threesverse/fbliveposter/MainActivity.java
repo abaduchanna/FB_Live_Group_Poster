@@ -820,6 +820,10 @@ public class MainActivity extends Activity {
         renderSetupCard(settingsOn, live);
         String last = p.getString(CampaignStore.KEY_LAST_CLICK, "");
         String diag = last.length() > 0 ? "\nLast click: " + last : "";
+        // v0.6.3: live navigation trace — kis step pe navigator hai (menu=/grp=/sMore=/act=).
+        // "drawer khulta hai par Groups nahi milta" jaisi reports ab 1 screenshot me diagnose.
+        String nav = PosterAccessibilityService.navTrace();
+        if (nav.length() > 0) diag += "\nNav: " + nav;
         boolean running = p.getBoolean(CampaignStore.KEY_RUNNING, false);
         boolean importing = p.getBoolean(CampaignStore.KEY_IMPORT_MODE, false);
         String base;
