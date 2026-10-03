@@ -12,6 +12,11 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- v0.6.1: keep the accessibility service alive after the app is closed
+         (battery killers ate the process and the user had to toggle OFF/ON). -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <application
         android:allowBackup="true"
@@ -39,8 +44,12 @@
             android:name=".PosterAccessibilityService"
             android:description="@string/accessibility_description"
             android:exported="false"
+            android:foregroundServiceType="specialUse"
             android:label="FB Live Group Poster"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Accessibility automation posting service must stay alive to tap on Facebook" />
             <intent-filter>
                 <action android:name="android.accessibilityservice.AccessibilityService" />
             </intent-filter>

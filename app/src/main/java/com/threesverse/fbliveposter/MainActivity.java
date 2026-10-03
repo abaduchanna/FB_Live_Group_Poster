@@ -82,12 +82,17 @@ public class MainActivity extends Activity {
     private TextView cardBody;
     private Button openA11yButton;
     private Button openAppInfoButton;
+    private Button batteryButton;
     private TextView probeRow;
     private TextView heartbeat;
     private boolean probeArmed = false;
+    /** v0.6.1: grace window before declaring the service "sleeping" — the
+     * system can take a few seconds to rebind it after the app reopens. */
+    private long appOpenAt;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        appOpenAt = System.currentTimeMillis();
         darkTheme = resolveDarkTheme();
         setTheme(darkTheme ? R.style.AppThemeDark : R.style.AppThemeLight);
         super.onCreate(savedInstanceState);
@@ -290,6 +295,10 @@ public class MainActivity extends Activity {
                 Uri.parse("package:" + getPackageName()))));
         setupCard.addView(openAppInfoButton);
 
+        batteryButton = button("Don't optimize battery (stop the killing)");
+        batteryButton.setOnClickListener(v -> requestBatteryExemption());
+        setupCard.addView(batteryButton);
+
         probeRow = new TextView(this);
         probeRow.setText("Run tap-engine self-test");
         probeRow.setTextSize(15);
@@ -313,13 +322,14 @@ public class MainActivity extends Activity {
         root.addView(setupCard, 0, cardLp);
     }
 
-    private void renderSetupCard(boolean on) {
-        if (on) {
+    private void renderSetupCard(boolean settingsOn, boolean live) {
+        if (live) {
             setupCard.setBackgroundColor(Color.rgb(212, 237, 218));
             cardTitle.setText("Accessibility is ON — automation ready");
             cardBody.setText("Press the self-test once to confirm that real taps work on this device. Then: paste the link, import/select groups, and press Auto post.");
             openA11yButton.setVisibility(View.GONE);
             openAppInfoButton.setVisibility(View.GONE);
+            batteryButton.setVisibility(View.GONE);
             probeRow.setVisibility(View.VISIBLE);
             long last = PosterAccessibilityService.lastEventMillis();
             String hb;
@@ -333,6 +343,32 @@ public class MainActivity extends Activity {
             }
             heartbeat.setText(hb + "\nTap engine: " + PosterAccessibilityService.lastGesture());
             heartbeat.setVisibility(View.VISIBLE);
+        } else if (settingsOn && System.currentTimeMillis() - appOpenAt <= 6000L) {
+            // The toggle is ON and the system may still be rebinding the
+            // service — give it a few seconds before alarming the user.
+            setupCard.setBackgroundColor(Color.rgb(212, 237, 218));
+            cardTitle.setText("Accessibility is ON — connecting to the service…");
+            cardBody.setText("One moment — the service is waking up.");
+            openA11yButton.setVisibility(View.GONE);
+            openAppInfoButton.setVisibility(View.GONE);
+            batteryButton.setVisibility(View.GONE);
+            probeRow.setVisibility(View.GONE);
+            heartbeat.setVisibility(View.GONE);
+        } else if (settingsOn) {
+            // v0.6.1: toggle ON but no live service = the battery saver killed
+            // the process after the app was closed (owner had to OFF/ON every
+            // time). The service now runs as a FOREGROUND service to prevent
+            // this; this card is the recovery path if a ROM kills it anyway.
+            setupCard.setBackgroundColor(Color.rgb(248, 215, 218));
+            cardTitle.setText("Accessibility is ON but the service is SLEEPING");
+            cardBody.setText("Your phone's battery saver killed it — that is why OFF/ON was needed after every app close.\n"
+                    + "- Quick fix: tap 'Open Accessibility Settings', switch FB Live Group Poster OFF and back ON\n"
+                    + "- Permanent fix: tap 'Don't optimize battery' below, choose Allow, then toggle the service OFF/ON once");
+            openA11yButton.setVisibility(View.VISIBLE);
+            openAppInfoButton.setVisibility(View.GONE);
+            batteryButton.setVisibility(View.VISIBLE);
+            probeRow.setVisibility(View.GONE);
+            heartbeat.setVisibility(View.GONE);
         } else {
             setupCard.setBackgroundColor(Color.rgb(255, 243, 205));
             cardTitle.setText("Automation is OFF — the accessibility service is not enabled");
@@ -345,8 +381,22 @@ public class MainActivity extends Activity {
                     + "     - Go back and repeat step 2");
             openA11yButton.setVisibility(View.VISIBLE);
             openAppInfoButton.setVisibility(View.VISIBLE);
+            batteryButton.setVisibility(View.GONE);
             probeRow.setVisibility(View.GONE);
             heartbeat.setVisibility(View.GONE);
+        }
+    }
+
+    private void requestBatteryExemption() {
+        try {
+            startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                    Uri.parse("package:" + getPackageName())));
+        } catch (Exception blocked) {
+            try {
+                startActivity(new Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS));
+            } catch (Exception alsoBlocked) {
+                Toast.makeText(this, "Open Settings - Battery and set this app to Unrestricted", Toast.LENGTH_LONG).show();
+            }
         }
     }
 
@@ -764,8 +814,10 @@ public class MainActivity extends Activity {
         // a stalled run is visible on screen instead of "nothing happens".
         // v0.6.0: also treat a LIVE-bound service as ON (settings string can
         // lag on some ROMs), and drive the guided setup card from it.
-        boolean svc = PosterAccessibilityService.isEnabled(this) || PosterAccessibilityService.isLive();
-        renderSetupCard(svc);
+        // v0.6.1: three states — OFF / ON-but-SLEEPING (battery killer) / ON.
+        boolean settingsOn = PosterAccessibilityService.isEnabled(this);
+        boolean live = PosterAccessibilityService.isLive();
+        renderSetupCard(settingsOn, live);
         String last = p.getString(CampaignStore.KEY_LAST_CLICK, "");
         String diag = last.length() > 0 ? "\nLast click: " + last : "";
         boolean running = p.getBoolean(CampaignStore.KEY_RUNNING, false);

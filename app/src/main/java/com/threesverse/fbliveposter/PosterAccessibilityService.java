@@ -2,11 +2,16 @@ package com.threesverse.fbliveposter;
 
 import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
+import android.app.Notification;
+import android.app.NotificationChannel;
+import android.app.NotificationManager;
 import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.pm.ServiceInfo;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -70,7 +75,13 @@ public class PosterAccessibilityService extends AccessibilityService {
     // section. Purana hard cap 30 pe 136-group list aadhi kat jati thi (owner: "30n
     // scroll nh puray groups").
     private static final int MAX_IMPORT_SCANS = 250;
-    private static final int IDLE_SCANS_TO_STOP = 4;
+    // Owner report v0.6.1: on a slow connection FB needs well over 2s to
+    // load the next batch, and 4 idle ticks (~8s) declared the list "done"
+    // after 2-3 screens. 8 idle ticks at a 3s backoff gives ~24s of real
+    // patience; the true bottom is still detected by the "Suggested for you"
+    // ceiling and the scroll-refusal fallback, so extra patience cannot
+    // cause an endless scan (MAX_IMPORT_SCANS stays the hard cap).
+    private static final int IDLE_SCANS_TO_STOP = 8;
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean processing;
@@ -125,6 +136,40 @@ public class PosterAccessibilityService extends AccessibilityService {
         instance = this;
         connected = true;
         lastEventAt = 0L;
+        keepAliveForeground();
+    }
+
+    // v0.6.1 (owner: after closing the app the toggle showed ON but the
+    // service was dead — battery killer ate the process, so every session
+    // started with a manual OFF/ON). Promoting the service to FOREGROUND
+    // with a silent ongoing notification makes the system treat it as
+    // something worth keeping, which is the standard fix for accessibility
+    // services being killed on swipe-away / aggressive battery savers.
+    private void keepAliveForeground() {
+        try {
+            String channel = "fbposter_live";
+            NotificationManager nm = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+            NotificationChannel ch = new NotificationChannel(channel,
+                    "Automation active", NotificationManager.IMPORTANCE_LOW);
+            ch.setDescription("Silent keep-alive so the poster service is not killed");
+            ch.setShowBadge(false);
+            nm.createNotificationChannel(ch);
+            Notification notif = new Notification.Builder(this, channel)
+                    .setSmallIcon(R.drawable.ic_launcher)
+                    .setContentTitle("FB Live Group Poster active")
+                    .setContentText("Automation running — keep this notification")
+                    .setOngoing(true)
+                    .setOnlyAlertOnce(true)
+                    .build();
+            if (Build.VERSION.SDK_INT >= 34) {
+                startForeground(2001, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+            } else {
+                startForeground(2001, notif);
+            }
+        } catch (Exception denied) {
+            // A few ROMs restrict foreground promotion from a11y contexts —
+            // the service still works, it just loses the keep-alive boost.
+        }
     }
 
     @Override
@@ -137,6 +182,10 @@ public class PosterAccessibilityService extends AccessibilityService {
     public void onDestroy() {
         connected = false;
         instance = null;
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } catch (Exception ignored) {
+        }
         super.onDestroy();
     }
 
@@ -250,12 +299,17 @@ public class PosterAccessibilityService extends AccessibilityService {
                         .putInt(CampaignStore.KEY_SCROLL_INDEX, p.getInt(CampaignStore.KEY_SCROLL_INDEX, 0) + 1)
                         .apply();
                 if (idle >= IDLE_SCANS_TO_STOP) {
-                    finishImport(p); // 4 ticks me koi naya naam nahi = list ka bottom
+                    finishImport(p); // 8 ticks me koi naya naam nahi = list ka bottom
                     return;
                 }
             }
             if (scans < MAX_IMPORT_SCANS && scrollForward(p, root)) {
-                p.edit().putInt(CampaignStore.KEY_SCAN_COUNT, scans + 1).apply();
+                // A successful scroll IS progress on a slow network — refresh
+                // the stage clock so the 90s safety timeout cannot fire while
+                // content is still streaming in.
+                p.edit().putInt(CampaignStore.KEY_SCAN_COUNT, scans + 1)
+                        .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                        .apply();
                 scheduleProcess(idleBackoff(p));
             } else {
                 finishImport(p);
@@ -598,9 +652,10 @@ public class PosterAccessibilityService extends AccessibilityService {
         return score;
     }
 
-    /** Idle (naya naam nahi) ticks pe lamba wait — slow network pe content load hone ka time. */
+    /** Idle (naya naam nahi) ticks pe lamba wait — slow network pe content load hone ka time.
+     *  v0.6.1: 2s was too fast for FB on mobile data; 3s + 8 idle ticks ≈ 24s patience. */
     private long idleBackoff(SharedPreferences p) {
-        return p.getInt(CampaignStore.KEY_NO_NEW_SCANS, 0) > 0 ? 2000L : 1100L;
+        return p.getInt(CampaignStore.KEY_NO_NEW_SCANS, 0) > 0 ? 3000L : 1100L;
     }
 
     private void advanceToNextGroup() {
