@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -22,7 +22,30 @@ jobs:
         with:
           gradle-version: "8.9"
       - run: gradle assembleDebug lint
-      - uses: actions/upload-artifact@v4
+
+      # Release assets do NOT count against artifact storage quota
+      # (same pattern as WiFi Transfer / POS / Studio repos).
+      - name: Read version
+        run: echo "VERSION=$(grep -oP 'versionName\s*=\s*\"\K[^\"]+' app/build.gradle.kts)" >> $GITHUB_ENV
+
+      - name: Rename APK for release
+        run: |
+          mkdir rel
+          cp app/build/outputs/apk/debug/FB_Live_Group_Poster-debug.apk \
+             "rel/FB_Live_Group_Poster-v${VERSION}.apk"
+          ls -la rel/
+
+      - name: Attach APK to release
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: FB_Live_Group_Poster
-          path: app/build/outputs/apk/debug/FB_Live_Group_Poster-debug.apk
+          tag_name: v${{ env.VERSION }}
+          name: v${{ env.VERSION }} — FB Live Group Poster
+          body: |
+            FB Live Group Poster Android app (side-load).
+
+            Install: uninstall the previous version once if Android complains
+            about the signature, then install this APK.
+          files: rel/FB_Live_Group_Poster-v${{ env.VERSION }}.apk
