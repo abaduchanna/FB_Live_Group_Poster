@@ -495,58 +495,80 @@ public class PosterAccessibilityService extends AccessibilityService {
         }
     }
 
-    // Owner flow v0.4.4 (device-audit): FB open hone ke baad pehle Feeds tab
-    // click (koi bhi purani screen khuli ho to clean feed pe aa jate hain), phir
-    // side drawer kholo, drawer me Groups entry dhoond ke click karo. Purana
-    // order (Groups → See more → scroll → Menu) real devices pe stall hota tha
-    // kyunki feed ke "See more" post-expanders ghalat click ho jate the.
+    // Owner workflow v0.6.2 — STRICT, no shortcuts (owner: "kitni baar workflow batau"):
+    //   1) FB khulte hi check: feed pe hain ya nahi (composer hint = feed)
+    //   2) Drawer/Menu kholo
+    //   3) Drawer me PEHLE "See more" click (Groups collapsed/hidden hota hai)
+    //   4) Phir "Groups" entry click
+    //   5) Groups screen: "Your groups" tab click
+    //   6) Scroll + scan
+    // The old STEP 0 (click the first exact "Groups" node anywhere) is GONE:
+    // the feed's top chips contain a "Groups" chip that opens the Groups
+    // FEED (not the list), and BFS also matches off-screen drawer nodes —
+    // tapping those either misses or taps the container center (a random
+    // row). The drawer path is now the ONLY path.
     private void navigateTowardGroups(SharedPreferences p, AccessibilityNodeInfo root) {
-        // STEP 0: Groups pehle se tappable? (drawer shortcut, Menu grid, ya
-        // bottom-nav tab) — sab se seedha raasta, baki steps skip.
-        AccessibilityNodeInfo groups = findByLabels(root, GROUPS_LABELS, true);
-        if (groups != null && clickNodeOrParent(groups)) {
-            arriveAtGroupsScreen(p);
-            return;
-        }
+        // Just-clicked-Groups debounce: give the Groups screen time to render
+        // before deciding we are lost and starting navigation over.
+        long clickedAt = p.getLong(CampaignStore.KEY_GROUPS_CLICKED_AT, 0L);
+        if (clickedAt > 0 && System.currentTimeMillis() - clickedAt < 5000L) return;
 
         boolean menuOpen = onMenuScreen(root);
 
-        // STEP 1: Feeds pehle — clean known screen jahan Menu/drawer reliably
-        // milta hai. Drawer already khula ho to ye step skip (warna "Feeds"
-        // shortcut drawer se wapas feed pe le jata hai).
-        if (!p.getBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false) && !menuOpen) {
-            AccessibilityNodeInfo feeds = findByLabels(root, FEEDS_LABELS, true);
-            if (feeds != null && clickNodeOrParent(feeds)) {
-                p.edit()
-                        .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
-                        .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
-                        .apply();
-                scheduleProcess(1500);
-                return;
+        // STEP 1: ensure we are on the feed first (owner step 1).
+        if (!menuOpen) {
+            if (onFeedScreen(root)) {
+                if (!p.getBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)) {
+                    p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
+                            .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+                }
+            } else if (!p.getBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)) {
+                AccessibilityNodeInfo feeds = findByLabels(root, FEEDS_LABELS, true);
+                if (feeds != null && clickNodeOrParent(feeds)) {
+                    p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
+                            .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+                    scheduleProcess(1500);
+                    return;
+                }
+                // Feeds tab nahi mila (already feed pe hain, ya is screen pe
+                // bottom nav nahi) — thoda intezar, phir aage badh jao.
+                if (!stageTimedOutSince(p, 3500L)) return;
+                p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true).apply();
             }
-            // Feeds tab nahi mila (already feed pe hain, ya is screen pe bottom
-            // nav nahi) — thoda intezar, phir aage badh jao.
-            if (!stageTimedOutSince(p, 3500L)) return;
-            p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true).apply();
         }
 
         if (menuOpen) {
-            // STEP 2b: drawer/Menu screen khula hai — Groups entry dhoondo:
-            // pehle "See more" (shortcuts collapsed hote hain), phir drawer scroll.
+            // STEP 3 (owner: "see more ko pehle click karna hai"): the drawer
+            // hides Groups behind "See more" until it is expanded. Visibility
+            // guard: BFS also returns off-screen nodes from the collapsed
+            // drawer — never tap those.
             AccessibilityNodeInfo seeMore = findByLabels(root, SEE_MORE_LABELS, true);
-            if (seeMore != null && stageTimedOutSince(p, 1500L) && clickNodeOrParent(seeMore)) {
+            if (seeMore != null && isVisibleOnScreen(root, seeMore)
+                    && stageTimedOutSince(p, 2500L) && clickNodeOrParent(seeMore)) {
                 p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
                 return;
             }
-            // Even expanded, the Groups entry can sit below the drawer fold —
-            // scroll the drawer to reveal it.
-            if (stageTimedOutSince(p, 2200L) && scrollForward(root)) {
+            // STEP 4 (owner: "phir groups ko click karna hai") — only a
+            // Groups entry that is actually RENDERED on screen right now.
+            AccessibilityNodeInfo groups = findByLabels(root, GROUPS_LABELS, true);
+            if (groups != null && isVisibleOnScreen(root, groups)
+                    && stageTimedOutSince(p, 1500L) && clickNodeOrParent(groups)) {
+                p.edit()
+                        .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, System.currentTimeMillis())
+                        .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
+                        .apply();
+                arriveAtGroupsScreen(p);
+                return;
+            }
+            // STEP 4b: expanded drawer me Groups abhi bhi fold ke neeche hai —
+            // drawer scroll karo.
+            if (stageTimedOutSince(p, 2500L) && scrollForward(root)) {
                 p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
             }
             return;
         }
 
-        // STEP 2a: side drawer kholo (Menu tab / hamburger) — rate-limited
+        // STEP 2: side drawer kholo (Menu tab / hamburger) — rate-limited
         // (double-tap drawer band kar deta).
         if (stageTimedOutSince(p, 2500L)) {
             AccessibilityNodeInfo menu = findByLabels(root, MENU_LABELS, true);
@@ -557,7 +579,7 @@ public class PosterAccessibilityService extends AccessibilityService {
             }
         }
 
-        // STEP 3: dead screen (drawer open twice, stray dialog…) — BACK resets
+        // STEP 5: dead screen (drawer open twice, stray dialog…) — BACK resets
         // the navigation so the next tick can tap Menu again instead of waiting
         // out the whole stage timeout.
         if (stageTimedOutSince(p, 12000L)) {
@@ -566,17 +588,38 @@ public class PosterAccessibilityService extends AccessibilityService {
         }
     }
 
+    /** Owner step 1: feed pe hain? — composer hint sirf main feed pe hota hai. */
+    private boolean onFeedScreen(AccessibilityNodeInfo root) {
+        return findByLabels(root, COMPOSER_LABELS, false) != null;
+    }
+
+    /** True only if the node is actually RENDERED on screen right now with a
+     * tappable size. BFS returns off-screen nodes inside scrollable
+     * containers too; tapping those either lands nowhere or hits the
+     * container's visible center — a random row. */
+    private boolean isVisibleOnScreen(AccessibilityNodeInfo root, AccessibilityNodeInfo node) {
+        if (root == null) return false;
+        android.graphics.Rect win = new android.graphics.Rect();
+        root.getBoundsInScreen(win);
+        if (win.isEmpty()) return false;
+        android.graphics.Rect r = new android.graphics.Rect();
+        node.getBoundsInScreen(r);
+        if (!r.intersect(win)) return false;
+        return r.height() > 40 && r.width() > 8;
+    }
+
     /** Groups entry click ho gayi — import me "Your groups" tab pe jana hai (owner:
-     *  "your groups main jao"), campaign me seedha group-name scan. */
+     *  "your groups main jao"), campaign me bhi pehle STAGE_NAV_GROUPS ka
+     *  onGroupsScreen branch chalega jo "Your groups" tab click kar ke
+     *  STAGE_FIND_GROUP deta hai (owner step 5 — one-shot, har tick repeat nahi). */
     private void arriveAtGroupsScreen(SharedPreferences p) {
         setStage(p, p.getBoolean(CampaignStore.KEY_IMPORT_MODE, false)
                 ? CampaignStore.STAGE_PICK_TAB
-                : CampaignStore.STAGE_FIND_GROUP);
+                : CampaignStore.STAGE_NAV_GROUPS);
         p.edit()
                 .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
                 .putInt(CampaignStore.KEY_NO_NEW_SCANS, 0)
                 .putInt(CampaignStore.KEY_SCROLL_INDEX, 0)
-                .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
                 .apply();
     }
 
