@@ -207,18 +207,20 @@ public class PosterAccessibilityService extends AccessibilityService {
     private boolean isTrackedPackage(String pkg, SharedPreferences p) {
         if (pkg == null) return false;
         String selected = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
-        return pkg.toLowerCase().contains("facebook") || pkg.equals(selected);
+        // More than one Facebook-family app may be installed. Only the app
+        // explicitly selected by the user is allowed to drive this session.
+        return !selected.isEmpty() && pkg.equals(selected);
     }
 
     private void scheduleProcess(long delayMs) {
         if (processing) return;
         processing = true;
         handler.postDelayed(() -> {
-            try {
-                processCurrentScreen();
-            } finally {
-                processing = false;
-            }
+            // Clear before processing so a state-machine step can schedule its
+            // own next retry. Clearing afterwards silently dropped slow-load
+            // retries made from importTick()/navigateTowardGroups().
+            processing = false;
+            processCurrentScreen();
         }, delayMs);
     }
 
@@ -228,7 +230,10 @@ public class PosterAccessibilityService extends AccessibilityService {
         boolean importing = p.getBoolean(CampaignStore.KEY_IMPORT_MODE, false);
         if (!running && !importing) return;
         AccessibilityNodeInfo root = getRootInActiveWindow();
-        if (root == null) return;
+        if (root == null) {
+            scheduleProcess(1600L);
+            return;
+        }
 
         if (importing) {
             importTick(p, root);
@@ -255,6 +260,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                 return;
             }
             navigateTowardGroups(p, root);
+            scheduleProcess(1800L);
             return;
         }
 
@@ -272,6 +278,9 @@ public class PosterAccessibilityService extends AccessibilityService {
                         .putInt(CampaignStore.KEY_SCROLL_INDEX, 0)
                         .apply();
                 scheduleProcess(1500);
+            } else {
+                // Your-groups tab can arrive late on mobile data.
+                scheduleProcess(2200L);
             }
             return;
         }
@@ -327,7 +336,15 @@ public class PosterAccessibilityService extends AccessibilityService {
                         .apply();
                 scheduleProcess(idleBackoff(p));
             } else {
-                finishImport(p);
+                // A temporarily non-scrollable list usually means Facebook is
+                // still loading the next batch. Do not declare completion on
+                // the first refusal; wait through the same idle budget.
+                int idle = p.getInt(CampaignStore.KEY_NO_NEW_SCANS, 0);
+                if (scans >= MAX_IMPORT_SCANS || idle >= IDLE_SCANS_TO_STOP) {
+                    finishImport(p);
+                } else {
+                    scheduleProcess(idleBackoff(p));
+                }
             }
         }
     }
@@ -430,6 +447,8 @@ public class PosterAccessibilityService extends AccessibilityService {
             if (composer != null && clickNodeOrParent(composer)) {
                 setStage(p, CampaignStore.STAGE_FILL_COMPOSER);
                 scheduleProcess(1400);
+            } else {
+                scheduleProcess(1800L);
             }
             return;
         }
@@ -442,9 +461,11 @@ public class PosterAccessibilityService extends AccessibilityService {
                 AccessibilityNodeInfo tab = findByLabels(root, YOUR_GROUPS_HINTS, false);
                 if (tab != null) clickNodeOrParent(tab);
                 setStage(p, CampaignStore.STAGE_FIND_GROUP);
+                scheduleProcess(1800L);
                 return;
             }
             navigateTowardGroups(p, root);
+            scheduleProcess(1800L);
             return;
         }
 
@@ -458,7 +479,9 @@ public class PosterAccessibilityService extends AccessibilityService {
             }
             AccessibilityNodeInfo row = findGroupRow(root, name);
             if (row != null && clickNodeOrParent(row)) {
-                e.remove(CampaignStore.KEY_SCAN_COUNT).apply();
+                e.remove(CampaignStore.KEY_SCAN_COUNT)
+                        .remove(CampaignStore.KEY_NO_NEW_SCANS)
+                        .apply();
                 setStage(p, CampaignStore.STAGE_OPEN_COMPOSER);
                 toast("Found group: " + name);
                 scheduleProcess(1500);
@@ -469,13 +492,22 @@ public class PosterAccessibilityService extends AccessibilityService {
                     // lag sakte hain — har successful scroll progress hai, stage
                     // timeout refresh karo warna 45s me "skip" ho jata tha.
                     e.putInt(CampaignStore.KEY_SCAN_COUNT, scans + 1)
+                            .putInt(CampaignStore.KEY_NO_NEW_SCANS, 0)
                             .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
                             .apply();
                     scheduleProcess(1100);
                 } else {
-                    e.remove(CampaignStore.KEY_SCAN_COUNT).apply();
-                    toast("Group not in your list: " + name + " — skipping");
-                    advanceToNextGroup();
+                    int idle = p.getInt(CampaignStore.KEY_NO_NEW_SCANS, 0) + 1;
+                    if (scans >= MAX_GROUP_SCANS || idle >= IDLE_SCANS_TO_STOP) {
+                        e.remove(CampaignStore.KEY_SCAN_COUNT)
+                                .remove(CampaignStore.KEY_NO_NEW_SCANS)
+                                .apply();
+                        toast("Group not in your list: " + name + " — skipping");
+                        advanceToNextGroup();
+                    } else {
+                        e.putInt(CampaignStore.KEY_NO_NEW_SCANS, idle).apply();
+                        scheduleProcess(3000L);
+                    }
                 }
             }
             return;
@@ -493,7 +525,11 @@ public class PosterAccessibilityService extends AccessibilityService {
                             ? "Message ready — posting…"
                             : "Message ready — press Post manually");
                     if (p.getBoolean(CampaignStore.KEY_AUTO_POST, false)) scheduleProcess(1200);
+                } else {
+                    scheduleProcess(1800L);
                 }
+            } else {
+                scheduleProcess(1800L);
             }
             return;
         }
@@ -506,6 +542,8 @@ public class PosterAccessibilityService extends AccessibilityService {
                 int delaySeconds = p.getInt(CampaignStore.KEY_DELAY, 90);
                 toast("Posted. Next group in " + delaySeconds + " seconds");
                 handler.postDelayed(this::advanceToNextGroup, delaySeconds * 1000L);
+            } else {
+                scheduleProcess(1800L);
             }
         }
     }
@@ -536,6 +574,20 @@ public class PosterAccessibilityService extends AccessibilityService {
 
         boolean menuOpen = onMenuScreen(root);
         boolean onFeed = !menuOpen && onFeedScreen(root);
+        boolean feedTapped = p.getBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false);
+
+        // Facebook can reopen on the drawer it remembered from the previous
+        // session. The requested sequence starts from Feed, so close that old
+        // drawer before doing anything inside it.
+        if (menuOpen && !feedTapped) {
+            setNavTrace("menu=1 feedTap=0 act=close-stale-menu");
+            if (stageTimedOutSince(p, 1800L)) {
+                p.edit().putLong(CampaignStore.KEY_STAGE_SINCE,
+                        System.currentTimeMillis()).apply();
+                performGlobalAction(GLOBAL_ACTION_BACK);
+            }
+            return;
+        }
 
         // v0.6.3 anti-loop: drawer band hote hi See-more session counter reset
         // (naya drawer session = phir se 2 See-more clicks ki allowance).
@@ -550,15 +602,43 @@ public class PosterAccessibilityService extends AccessibilityService {
         // unknown screen se Menu tap karta rehta tha, kabhi feed wapas nahi
         // aata tha (owner: "fb open karte hi videos me maa chudwane ja raha").
         if (!menuOpen) {
+            AccessibilityNodeInfo feeds = findByLabels(root, FEEDS_LABELS, true);
+            boolean feedsVisible = feeds != null && isVisibleOnScreen(root, feeds);
+
+            // Always perform the requested first step once per navigation:
+            // select Feed/Feeds, even if Facebook happened to launch there.
+            if (!feedTapped) {
+                if (feedsVisible && stageTimedOutSince(p, 1800L) && clickNodeOrParent(feeds)) {
+                    p.edit()
+                            .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
+                            .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                            .apply();
+                    setNavTrace("feedTap=1 act=feeds-click");
+                    scheduleProcess(1800L);
+                    return;
+                }
+                setNavTrace("feedTap=0 feeds=" + (feedsVisible ? "visible" : "none")
+                        + " act=feeds-wait");
+                // Some Facebook builds expose no Feed node once it is already
+                // selected. After a patient wait, accept the verified feed.
+                if (onFeed && stageTimedOutSince(p, 8000L)) {
+                    p.edit()
+                            .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
+                            .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                            .apply();
+                    setNavTrace("feedTap=fallback act=feed-verified");
+                    return;
+                }
+                if (!stageTimedOutSince(p, 15000L)) return;
+            }
+
             if (onFeed) {
                 setNavTrace("feed=1 act=feed-verified");
             } else {
-                AccessibilityNodeInfo feeds = findByLabels(root, FEEDS_LABELS, true);
-                boolean feedsVisible = feeds != null && isVisibleOnScreen(root, feeds);
                 if (feedsVisible && stageTimedOutSince(p, 3500L) && clickNodeOrParent(feeds)) {
                     p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
-                    setNavTrace("feed=0 act=feeds-click");
-                    scheduleProcess(1500);
+                    setNavTrace("feed=0 act=feeds-retry");
+                    scheduleProcess(1800L);
                     return;
                 }
                 // Feeds tab nahi (post detail, dialog, covered screen) — 12s
@@ -567,6 +647,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                         + " act=feed-wait");
                 if (!stageTimedOutSince(p, 12000L)) return;
                 p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+                p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false).apply();
                 setNavTrace("feed=0 act=feed-back-reset");
                 performGlobalAction(GLOBAL_ACTION_BACK);
                 return;
@@ -583,7 +664,26 @@ public class PosterAccessibilityService extends AccessibilityService {
             // (owner ka exact reported loop).
             AccessibilityNodeInfo groups = findByLabels(root, GROUPS_LABELS, true);
             boolean groupsVisible = groups != null && isVisibleOnScreen(root, groups);
-            if (groupsVisible && stageTimedOutSince(p, 1500L) && clickNodeOrParent(groups)) {
+            int smClicks = p.getInt(CampaignStore.KEY_SEEMORE_CLICKS, 0);
+            AccessibilityNodeInfo seeMore = findByLabels(root, SEE_MORE_LABELS, true);
+            boolean smVisible = seeMore != null && isVisibleOnScreen(root, seeMore);
+
+            // Required drawer order: expand See more once before Groups. If
+            // this Facebook build has no See more control, Groups remains a
+            // valid direct fallback.
+            if (smClicks == 0 && smVisible && stageTimedOutSince(p, 1800L)
+                    && clickNodeOrParent(seeMore)) {
+                p.edit()
+                        .putInt(CampaignStore.KEY_SEEMORE_CLICKS, 1)
+                        .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                        .apply();
+                setNavTrace("menu=1 act=see-more#1");
+                scheduleProcess(1800L);
+                return;
+            }
+
+            if (groupsVisible && (smClicks > 0 || !smVisible)
+                    && stageTimedOutSince(p, 1500L) && clickNodeOrParent(groups)) {
                 p.edit()
                         .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, System.currentTimeMillis())
                         .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
@@ -599,11 +699,8 @@ public class PosterAccessibilityService extends AccessibilityService {
             // those. CAP = 2 clicks per drawer session: do no-op clicks ke
             // baad hum scroll + Groups-search karte rahenge, See-more pe
             // hamesha ke liye stuck nahi honge.
-            int smClicks = p.getInt(CampaignStore.KEY_SEEMORE_CLICKS, 0);
-            AccessibilityNodeInfo seeMore =
-                    smClicks < 2 ? findByLabels(root, SEE_MORE_LABELS, true) : null;
-            boolean smVisible = seeMore != null && isVisibleOnScreen(root, seeMore);
-            if (smVisible && stageTimedOutSince(p, 2500L) && clickNodeOrParent(seeMore)) {
+            if (smClicks > 0 && smClicks < 2 && smVisible
+                    && stageTimedOutSince(p, 2500L) && clickNodeOrParent(seeMore)) {
                 p.edit()
                         .putInt(CampaignStore.KEY_SEEMORE_CLICKS, smClicks + 1)
                         .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
@@ -651,14 +748,17 @@ public class PosterAccessibilityService extends AccessibilityService {
         // out the whole stage timeout.
         if (stageTimedOutSince(p, 12000L)) {
             p.edit().putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis()).apply();
+            p.edit().putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false).apply();
             setNavTrace("act=nav-back-reset");
             performGlobalAction(GLOBAL_ACTION_BACK);
         }
     }
 
-    /** Owner step 1: feed pe hain? — composer hint sirf main feed pe hota hai. */
+    /** Owner step 1: feed pe hain? Composer is strongest; selected Feed tab is fallback. */
     private boolean onFeedScreen(AccessibilityNodeInfo root) {
-        return findByLabels(root, COMPOSER_LABELS, false) != null;
+        if (findByLabels(root, COMPOSER_LABELS, false) != null) return true;
+        AccessibilityNodeInfo feed = findByLabels(root, FEEDS_LABELS, true);
+        return feed != null && feed.isVisibleToUser() && feed.isSelected();
     }
 
     /** True only if the node is actually RENDERED on screen right now with a

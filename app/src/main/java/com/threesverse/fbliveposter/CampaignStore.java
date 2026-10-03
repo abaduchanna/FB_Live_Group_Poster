@@ -187,6 +187,8 @@ final class CampaignStore {
                 .putInt(KEY_NO_NEW_SCANS, 0)
                 .putInt(KEY_SCROLL_INDEX, 0)
                 .putBoolean(KEY_NAV_FEEDS_DONE, false)
+                .putLong(KEY_GROUPS_CLICKED_AT, 0L)
+                .putInt(KEY_SEEMORE_CLICKS, 0)
                 .apply();
     }
 }

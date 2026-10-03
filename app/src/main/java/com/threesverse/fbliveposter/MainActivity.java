@@ -260,7 +260,8 @@ public class MainActivity extends Activity {
         autoPostInput.setChecked(p.getBoolean(CampaignStore.KEY_AUTO_POST, false));
         String savedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
         if (!savedPackage.isEmpty()) {
-            facebookAppStatus.setText("Last used: " + facebookLabel(savedPackage) + " — you will choose again on Start");
+            facebookAppStatus.setText("Saved Facebook app: " + facebookLabel(savedPackage)
+                    + " — confirm or change it when you start");
         }
     }
 
@@ -601,13 +602,16 @@ public class MainActivity extends Activity {
         int pad = dp(20);
         panel.setPadding(pad, dp(4), pad, dp(4));
 
-        TextView hint = text("Facebook, Facebook Lite or a clone — you choose before every campaign. The app never picks one by itself.", 14, false);
+        String savedPackage = CampaignStore.prefs(this)
+                .getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
+        TextView hint = text("Your saved Facebook app is preselected. Confirm it or choose another app; the app never silently switches apps.", 14, false);
         hint.setPadding(0, 0, 0, dp(8));
         panel.addView(hint);
 
         java.util.Map<Integer, Integer> idToIndex = new java.util.HashMap<>();
         RadioGroup group = new RadioGroup(this);
         group.setOrientation(LinearLayout.VERTICAL);
+        int savedRowId = View.NO_ID;
         for (int i = 0; i < packages.size(); i++) {
             RadioButton row = new RadioButton(this);
             int rowId = View.generateViewId();
@@ -618,7 +622,9 @@ public class MainActivity extends Activity {
             row.setTextColor(darkTheme ? FB_DARK_TEXT : FB_LIGHT_TEXT);
             row.setPadding(dp(6), dp(10), dp(6), dp(10));
             group.addView(row);
+            if (packages.get(i).equals(savedPackage)) savedRowId = rowId;
         }
+        if (savedRowId != View.NO_ID) group.check(savedRowId);
         panel.addView(group);
 
         AlertDialog dialog = new AlertDialog.Builder(this)
@@ -629,7 +635,7 @@ public class MainActivity extends Activity {
                 .create();
         dialog.setOnShowListener(ignored -> {
             final Button confirm = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
-            confirm.setEnabled(false);
+            confirm.setEnabled(group.getCheckedRadioButtonId() != View.NO_ID);
             confirm.setOnClickListener(v -> {
                 Integer chosen = idToIndex.get(group.getCheckedRadioButtonId());
                 if (chosen == null) return;
@@ -745,7 +751,11 @@ public class MainActivity extends Activity {
                 .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
                 .putLong(CampaignStore.KEY_LAST_ACTION, System.currentTimeMillis())
                 .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
+                .putInt(CampaignStore.KEY_NO_NEW_SCANS, 0)
+                .putInt(CampaignStore.KEY_SCROLL_INDEX, 0)
                 .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
+                .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, 0L)
+                .putInt(CampaignStore.KEY_SEEMORE_CLICKS, 0)
                 .apply();
 
         facebookAppStatus.setText("Import app: " + facebookLabel(packageName));
@@ -781,6 +791,11 @@ public class MainActivity extends Activity {
                 .putLong(CampaignStore.KEY_LAST_ACTION, now)
                 .putLong(CampaignStore.KEY_STAGE_SINCE, now)
                 .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
+                .putInt(CampaignStore.KEY_NO_NEW_SCANS, 0)
+                .putInt(CampaignStore.KEY_SCROLL_INDEX, 0)
+                .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
+                .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, 0L)
+                .putInt(CampaignStore.KEY_SEEMORE_CLICKS, 0)
                 .apply();
 
         facebookAppStatus.setText("Facebook app: " + facebookLabel(facebookPackage));
