@@ -40,6 +40,13 @@
             </intent-filter>
         </activity>
 
+        <!-- v0.7.1: alternative web engine (m.facebook.com DOM automation).
+             configChanges keeps the WebView alive across rotation. -->
+        <activity
+            android:name=".WebPosterActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize"
+            android:exported="false" />
+
         <service
             android:name=".PosterAccessibilityService"
             android:description="@string/accessibility_description"

@@ -165,6 +165,13 @@ public class MainActivity extends Activity {
         importButton.setOnClickListener(v -> startImport());
         root.addView(importButton);
 
+        // v0.7.1 ALTERNATIVE ENGINE: DOM automation on m.facebook.com — no
+        // accessibility-tree guessing, real hyperlinks, DOM-snapshot diagnostics
+        // on failure. Runs fully independent of the a11y service.
+        Button webButton = button("Web poster (new engine — m.facebook.com)");
+        webButton.setOnClickListener(v -> startActivity(new Intent(this, WebPosterActivity.class)));
+        root.addView(webButton);
+
         LinearLayout selectionRow = new LinearLayout(this);
         selectionRow.setOrientation(LinearLayout.HORIZONTAL);
         selectionRow.setGravity(android.view.Gravity.CENTER_VERTICAL);
@@ -235,6 +242,7 @@ public class MainActivity extends Activity {
         Button stop = button("Stop campaign");
         stop.setOnClickListener(v -> {
             CampaignStore.stop(this);
+            WebPosterActivity.stopAll(); // v0.7.1: also kill the web engine loop
             refreshStatus();
             Toast.makeText(this, "Campaign stopped", Toast.LENGTH_SHORT).show();
         });
@@ -762,6 +770,14 @@ public class MainActivity extends Activity {
                 .apply();
 
         facebookAppStatus.setText("Import app: " + facebookLabel(packageName));
+
+        // v0.7.1 DIRECT JUMP: land straight on the Groups screen via applink —
+        // the drawer/coordinate walk inside the service is now only a fallback.
+        boolean jumped = PosterAccessibilityService.openGroupsScreen(this, packageName);
+        if (jumped) {
+            Toast.makeText(this, "Facebook opens straight on the Groups screen — the app taps 'Your groups' and scans by itself. Keep Facebook open.", Toast.LENGTH_LONG).show();
+            return;
+        }
         Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
         if (launch == null) {
             CampaignStore.stop(this);

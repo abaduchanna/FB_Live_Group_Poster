@@ -264,6 +264,18 @@ public class PosterAccessibilityService extends AccessibilityService {
                 setStage(p, CampaignStore.STAGE_PICK_TAB);
                 return;
             }
+            // v0.7.1 DIRECT JUMP: the drawer walk (Feeds→Menu→See more→Groups)
+            // is what broke in every release so far. The applink lands straight
+            // on the Groups screen — navigateTowardGroups is now only fallback.
+            long now = System.currentTimeMillis();
+            if (now - p.getLong(CampaignStore.KEY_WEBJUMP_AT, 0L) > 15000L) {
+                String pkg = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
+                p.edit().putLong(CampaignStore.KEY_WEBJUMP_AT, now).apply();
+                if (!pkg.isEmpty() && openGroupsScreen(this, pkg)) {
+                    setNavTrace("act=import-jump");
+                    return;
+                }
+            }
             if (stageTimedOut(p, IMPORT_TIMEOUT_MS)) {
                 finishImport(p);
                 return;
@@ -472,9 +484,20 @@ public class PosterAccessibilityService extends AccessibilityService {
                 // group name "For you" suggestions me kabhi nahi milega.
                 AccessibilityNodeInfo tab = findByLabels(root, YOUR_GROUPS_HINTS, false);
                 if (tab != null) clickNodeOrParent(tab);
+                p.edit().putLong(CampaignStore.KEY_YGTAB_AT, 1L).apply(); // tab handled for the next stage
                 setStage(p, CampaignStore.STAGE_FIND_GROUP);
                 scheduleProcess(1800L);
                 return;
+            }
+            // v0.7.1 DIRECT JUMP first (rate-limited) — drawer walk only fallback.
+            long now = System.currentTimeMillis();
+            if (now - p.getLong(CampaignStore.KEY_WEBJUMP_AT, 0L) > 15000L) {
+                String pkg = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
+                p.edit().putLong(CampaignStore.KEY_WEBJUMP_AT, now).apply();
+                if (!pkg.isEmpty() && openGroupsScreen(this, pkg)) {
+                    setNavTrace("act=direct-jump");
+                    return;
+                }
             }
             navigateTowardGroups(p, root);
             scheduleProcess(1800L);
@@ -490,7 +513,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                 return;
             }
             AccessibilityNodeInfo row = findGroupRow(root, name);
-            if (row != null && clickNodeOrParent(row)) {
+            if (row != null && isVisibleOnScreen(root, row) && clickNodeOrParent(row)) {
                 e.remove(CampaignStore.KEY_SCAN_COUNT)
                         .remove(CampaignStore.KEY_NO_NEW_SCANS)
                         .apply();
@@ -498,6 +521,31 @@ public class PosterAccessibilityService extends AccessibilityService {
                 toast("Found group: " + name);
                 scheduleProcess(1500);
             } else {
+                // v0.7.1 recovery order after the direct jump:
+                // (1) 8s on an unrecognized screen → drawer/coordinate path as fallback;
+                // (2) FIRST Groups-screen tick → click "Your groups" tab ONCE
+                //     (the applink may land on the "For you" tab — group rows
+                //     never appear there, so scrolling it would be useless);
+                // (3) scroll the list for the row (idle patience below).
+                if (!onGroupsScreen(root)) {
+                    if (stageTimedOutSince(p, 8000L)) {
+                        setStage(p, CampaignStore.STAGE_NAV_GROUPS);
+                        setNavTrace("act=jump-fallback-nav");
+                    } else {
+                        setNavTrace("act=jump-land-wait");
+                    }
+                    return;
+                }
+                if (p.getLong(CampaignStore.KEY_YGTAB_AT, 0L) == 0L) {
+                    AccessibilityNodeInfo tab = findByLabels(root, YOUR_GROUPS_HINTS, false);
+                    if (tab != null && isVisibleOnScreen(root, tab)) {
+                        p.edit().putLong(CampaignStore.KEY_YGTAB_AT, 1L).apply();
+                        clickNodeOrParent(tab);
+                        setNavTrace("act=your-groups-tab");
+                        scheduleProcess(1500);
+                        return;
+                    }
+                }
                 int scans = p.getInt(CampaignStore.KEY_SCAN_COUNT, 0);
                 if (scrollForward(root) && scans < MAX_GROUP_SCANS) {
                     // Lambi list (136 groups) me group tak scroll karne me 30+ screens
@@ -985,6 +1033,27 @@ public class PosterAccessibilityService extends AccessibilityService {
                     .apply();
             intent = new Intent(Intent.ACTION_VIEW, Uri.parse(target.optString("v", "")));
         } else {
+            // v0.7.1 DIRECT JUMP for imported (name) targets too: applink lands
+            // straight on the Groups screen, then only "Your groups" tab + row
+            // click remain. The drawer/coordinate walk is now ONLY the fallback
+            // when this jump fails.
+            boolean jumped = openGroupsScreen(context, selectedPackage);
+            if (jumped) {
+                p.edit()
+                        .putString(CampaignStore.KEY_STAGE, CampaignStore.STAGE_FIND_GROUP)
+                        .putLong(CampaignStore.KEY_LAST_ACTION, System.currentTimeMillis())
+                        .putLong(CampaignStore.KEY_STAGE_SINCE, System.currentTimeMillis())
+                        .putLong(CampaignStore.KEY_WEBJUMP_AT, System.currentTimeMillis())
+                        .putInt(CampaignStore.KEY_SCAN_COUNT, 0)
+                        .putInt(CampaignStore.KEY_NO_NEW_SCANS, 0)
+                        .putLong(CampaignStore.KEY_YGTAB_AT, 0L)
+                        .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, false)
+                        .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
+                        .putLong(CampaignStore.KEY_COORD_TAP_AT, 0L)
+                        .putInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, 0)
+                        .apply();
+                return;
+            }
             // Imported group: open the app, navigate to Groups, then find the group by name.
             p.edit()
                     .putString(CampaignStore.KEY_STAGE, CampaignStore.STAGE_NAV_GROUPS)
@@ -1011,6 +1080,31 @@ public class PosterAccessibilityService extends AccessibilityService {
             CampaignStore.stop(context);
             Toast.makeText(context, "The selected Facebook app is not available. Campaign stopped.", Toast.LENGTH_LONG).show();
         }
+    }
+
+    /** v0.7.1 DIRECT JUMP: applink straight into the Facebook Groups screen.
+     *  Replaces the fragile drawer walk (Feeds→Menu→See more→Groups) — that
+     *  walk is what broke in every release so far, while deep links (already
+     *  used for URL targets) never failed. Tries the https applink first (FB
+     *  app resolves its own domain to the Groups screen), then the classic
+     *  fb:// scheme. Returns false only if the FB app cannot open either. */
+    static boolean openGroupsScreen(Context context, String fbPackage) {
+        Uri[] candidates = {
+                Uri.parse("https://www.facebook.com/groups/"),
+                Uri.parse("fb://groups/"),
+                Uri.parse("fb://groups")
+        };
+        for (Uri uri : candidates) {
+            try {
+                Intent jump = new Intent(Intent.ACTION_VIEW, uri);
+                jump.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                jump.setPackage(fbPackage);
+                context.startActivity(jump);
+                return true;
+            } catch (Exception ignored) {
+            }
+        }
+        return false;
     }
 
     static boolean isEnabled(Context context) {

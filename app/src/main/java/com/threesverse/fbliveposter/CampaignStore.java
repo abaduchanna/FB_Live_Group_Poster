@@ -35,6 +35,8 @@ final class CampaignStore {
     static final String KEY_COORD_NAV_STEP = "coord_nav_step"; // 0=none, 1=Feed tapped, 2=drawer tapped
     static final String KEY_COORD_TAP_AT = "coord_tap_at";
     static final String KEY_DRAWER_TAP_ATTEMPTS = "drawer_tap_attempts";
+    static final String KEY_WEBJUMP_AT = "webjump_at";         // v0.7.1: last deep-link jump time (rate-limit direct Groups-screen jumps)
+    static final String KEY_YGTAB_AT = "yg_tab_at";            // v0.7.1: "Your groups" tab click done for the current FIND_GROUP stage (0 = not yet)
 
     static final String STAGE_OPEN_GROUP = "open_group";
     static final String STAGE_NAV_GROUPS = "nav_groups";    // find + tap the Groups entry inside Facebook
