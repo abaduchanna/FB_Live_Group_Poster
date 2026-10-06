@@ -1,5 +1,7 @@
 # FB_Live_Group_Poster (Android)
 
+
+> **3SVerse standard:** this app ships as an Android APK built to the same 3SVerse brand standard as every 3SVerse app — new logo, Segoe UI/Roboto type, cyan-magenta accent language, standardized header and footer. Developed by www.3SVerse.com.
 An open-source Android proof of concept that shares a Facebook Live link to a user-approved list of Facebook groups through the installed Facebook app.
 
 > **Important:** Meta removed the Facebook Groups API and `publish_to_groups` on April 22, 2024. This project therefore uses Android Accessibility to assist with the visible Facebook UI. It is not an official Facebook integration, selectors can break when Facebook changes its app, and use may be restricted by Facebook or individual group rules.
@@ -78,6 +80,6 @@ The APK is written to `app/build/outputs/apk/debug/FB_Live_Group_Poster-debug.ap
 
 ## License
 
-MIT License. Copyright (c) 2026 **3S Verse**. This license applies only to this repository; it does not automatically apply to other 3S Verse repositories.
+MIT License. Copyright (c) 2026 **3SVerse**. This license applies only to this repository; it does not automatically apply to other 3SVerse repositories.
 
 This project is independent and is not affiliated with or endorsed by Meta or Facebook.
