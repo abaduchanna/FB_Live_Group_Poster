@@ -125,6 +125,46 @@ public class PosterAccessibilityService extends AccessibilityService {
     // geometry debugging (owner screenshot pe dikhega tap kahan land hua).
     volatile static String lastTapPoint = "";
 
+    // v0.7.3 CCLEANER-PORT — engine decoded from com.avast.android.cleanercore2
+    // (CCleaner v26.12.2, classes3.dex: AccessibilityNodeInfoUtil /
+    // AccessibilityOperation / AccessibilityService). Techniques adopted:
+    // (1) normalized label matching, (2) focus-then-click tier, (3) stale-click
+    // freshness guard, (4) first-text-child-of-clickable-parent target
+    // resolution, (5) tap stroke timed by the system tap timeout.
+    // CCleaner skips accessibility events OLDER than the last successful click
+    // (lastSuccessfulClick timestamp). This engine is tick-driven, so the
+    // equivalent guard: a tick that re-finds the SAME label within one tick
+    // window after a successful tap is looking at a stale tree mid-transition
+    // — the duplicate tap is suppressed (this kills the double-tap bounce
+    // class, e.g. Menu tapped twice while the drawer was already opening).
+    volatile static long lastSuccessfulClickAt = 0L;
+    volatile static String lastSuccessfulClickLabel = "";
+
+    /** v0.7.3 CCleaner-port (AccessibilityNodeInfoUtil text normalizer):
+     * strip every non-letter/non-digit character and lowercase. "Write
+     * something…", "What's on your mind?", "Menu." all collapse to the same
+     * letter core, so punctuation/locale variants stop breaking label
+     * matches. \\p{L} covers Urdu/Arabic script, so localized labels still
+     * normalize correctly. Spaces are stripped too — matching is pure
+     * letter-core containment/equality. */
+    private static String ccNormalize(String s) {
+        if (s == null) return "";
+        return s.replaceAll("[^\\p{L}\\p{Nd}]", "").toLowerCase();
+    }
+
+    /** v0.7.3 CCleaner-port (tapNodeWithGesture): CCleaner times its tap
+     * stroke with ViewConfiguration.getTapTimeout() instead of a magic
+     * number. Clamped so odd ROM values cannot make taps too short to
+     * register or too slow to feel like a tap. */
+    private int tapStrokeMs() {
+        try {
+            int t = android.view.ViewConfiguration.get(getApplicationContext()).getTapTimeout();
+            return t < 100 ? 100 : Math.min(t, 150);
+        } catch (Exception e) {
+            return 110;
+        }
+    }
+
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
         if (event == null || event.getPackageName() == null) return;
@@ -1120,6 +1160,12 @@ public class PosterAccessibilityService extends AccessibilityService {
     }
 
     private AccessibilityNodeInfo findByLabels(AccessibilityNodeInfo root, List<String> labels, boolean exact) {
+        // v0.7.3 CCleaner-port: normalize each label ONCE per lookup, then
+        // compare letter-cores (see ccNormalize). exact = letter-core
+        // equality ("Menu." still matches "Menu"), fuzzy = letter-core
+        // containment ("Write something…" hits "Write something").
+        String[] nLabels = new String[labels.size()];
+        for (int i = 0; i < labels.size(); i++) nLabels[i] = ccNormalize(labels.get(i));
         Deque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
         int visited = 0;
@@ -1127,12 +1173,15 @@ public class PosterAccessibilityService extends AccessibilityService {
         while (!queue.isEmpty() && visited++ < MAX_LOOKUP_NODES
                 && System.nanoTime() < deadline) {
             AccessibilityNodeInfo node = queue.removeFirst();
-            String text = node.getText() == null ? "" : node.getText().toString().trim();
-            String desc = node.getContentDescription() == null ? "" : node.getContentDescription().toString().trim();
-            for (String label : labels) {
-                if ((exact && (text.equalsIgnoreCase(label) || desc.equalsIgnoreCase(label))) ||
-                        (!exact && (text.toLowerCase().contains(label.toLowerCase())
-                                || desc.toLowerCase().contains(label.toLowerCase())))) {
+            String text = node.getText() == null ? "" : node.getText().toString();
+            String desc = node.getContentDescription() == null ? "" : node.getContentDescription().toString();
+            String nText = ccNormalize(text);
+            String nDesc = ccNormalize(desc);
+            for (int li = 0; li < nLabels.length; li++) {
+                String nLabel = nLabels[li];
+                if (nLabel.isEmpty()) continue;
+                if ((exact && (nText.equals(nLabel) || nDesc.equals(nLabel))) ||
+                        (!exact && (nText.contains(nLabel) || nDesc.contains(nLabel)))) {
                     return node;
                 }
             }
@@ -1185,12 +1234,25 @@ public class PosterAccessibilityService extends AccessibilityService {
     // between a working and a dead mechanism on alternating clicks.
     private boolean clickNodeOrParent(AccessibilityNodeInfo node) {
         String label = safeLabel(node);
+        // v0.7.3 CCleaner-port (event-freshness guard): same label tapped
+        // successfully within one tick window = stale tree mid-transition —
+        // suppress the duplicate tap, report the action as already done.
+        long since = System.currentTimeMillis() - lastSuccessfulClickAt;
+        if (since >= 0 && since < 750
+                && ccNormalize(label).equals(ccNormalize(lastSuccessfulClickLabel))) {
+            noteClick("dup-guard", label, true);
+            return true;
+        }
+        // v0.7.3 CCleaner-port (click-target resolution): Litho rows expose
+        // the click handler on the clickable row, not on the text label.
+        node = resolveClickTarget(node);
         boolean ok;
         String how;
+        int tapMs = tapStrokeMs();
         if (gestureBroken) {
-            ok = clickA11y(node) || tapCenter(node, 3, 110);
+            ok = clickA11y(node) || tapCenter(node, 3, tapMs);
             how = "a11y-first";
-        } else if (tapCenter(node, 3, 110)) {
+        } else if (tapCenter(node, 3, tapMs)) {
             ok = true;
             how = "touch-tap";
         } else {
@@ -1203,11 +1265,66 @@ public class PosterAccessibilityService extends AccessibilityService {
         return ok;
     }
 
+    /** v0.7.3 CCleaner-port (isFirstChildOfClickableParent +
+     * getTopParentNode): a non-clickable text node that is the first
+     * text-bearing child of a clickable parent should be clicked AT THE
+     * PARENT — the row owns the handler and its center is the safe tap
+     * target. If the pattern does not match, the original node is returned
+     * unchanged (tapCenter's off-screen hard-fail stays authoritative). */
+    private AccessibilityNodeInfo resolveClickTarget(AccessibilityNodeInfo node) {
+        try {
+            if (node == null || node.isClickable()) return node;
+            AccessibilityNodeInfo parent = node.getParent();
+            for (int i = 0; parent != null && i < 4; i++) {
+                if (parent.isClickable() && isFirstTextChild(node, parent)) return parent;
+                parent = parent.getParent();
+            }
+        } catch (Exception ignored) {
+        }
+        return node;
+    }
+
+    /** CCleaner validator: is `node` the first non-empty-text child of
+     * `parent`? (Fallback text comparison because AccessibilityNodeInfo
+     * equality can be unreliable across separately-fetched instances.) */
+    private boolean isFirstTextChild(AccessibilityNodeInfo node, AccessibilityNodeInfo parent) {
+        int count = parent.getChildCount();
+        for (int i = 0; i < count; i++) {
+            AccessibilityNodeInfo child = parent.getChild(i);
+            if (child == null) continue;
+            CharSequence t = child.getText();
+            CharSequence d = child.getContentDescription();
+            boolean hasText = (t != null && t.length() > 0) || (d != null && d.length() > 0);
+            if (hasText) {
+                return child.equals(node) || (t != null && t.equals(node.getText()));
+            }
+        }
+        return false;
+    }
+
     private boolean clickA11y(AccessibilityNodeInfo node) {
         AccessibilityNodeInfo current = node;
         for (int i = 0; current != null && i < 5; i++) {
             if (current.isClickable() && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true;
             current = current.getParent();
+        }
+        // v0.7.3 CCleaner-port (processNodeClick tier 2): some nodes —
+        // WebView composer fields, Litho buttons — reject a bare ACTION_CLICK
+        // until they hold focus. Focus first, then click, before giving up.
+        current = node;
+        for (int i = 0; current != null && i < 5; i++) {
+            if (current.isClickable() && focusAndClick(current)) return true;
+            current = current.getParent();
+        }
+        return false;
+    }
+
+    /** v0.7.3 CCleaner-port (processNodeClick tier 2):
+     * ACCESSIBILITY_FOCUS (or FOCUS) followed by ACTION_CLICK. */
+    private boolean focusAndClick(AccessibilityNodeInfo node) {
+        if (node.performAction(AccessibilityNodeInfo.ACTION_ACCESSIBILITY_FOCUS)
+                || node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
+            return node.performAction(AccessibilityNodeInfo.ACTION_CLICK);
         }
         return false;
     }
@@ -1223,6 +1340,12 @@ public class PosterAccessibilityService extends AccessibilityService {
 
     private void noteClick(String how, String label, boolean ok) {
         try {
+            // v0.7.3 CCleaner-port: record the freshness-guard timestamp on
+            // every successful click (drives the dup-guard in clickNodeOrParent).
+            if (ok) {
+                lastSuccessfulClickAt = System.currentTimeMillis();
+                lastSuccessfulClickLabel = label == null ? "" : label;
+            }
             CampaignStore.prefs(this).edit()
                     .putString(CampaignStore.KEY_LAST_CLICK,
                             how + (ok ? " OK: " : " FAILED: ") + label)
@@ -1358,18 +1481,24 @@ public class PosterAccessibilityService extends AccessibilityService {
     }
 
     private boolean matchesPostLabel(AccessibilityEvent event) {
+        // v0.7.3 CCleaner-port: letter-core equality ("Post!", "post ",
+        // localized punctuation variants all match).
         for (CharSequence value : event.getText()) {
             if (value == null) continue;
+            String nv = ccNormalize(value.toString());
             for (String label : POST_LABELS) {
-                if (value.toString().trim().equalsIgnoreCase(label)) return true;
+                if (nv.equals(ccNormalize(label))) return true;
             }
         }
         AccessibilityNodeInfo source = event.getSource();
         if (source == null) return false;
-        String text = source.getText() == null ? "" : source.getText().toString().trim();
-        String description = source.getContentDescription() == null ? "" : source.getContentDescription().toString().trim();
+        String text = source.getText() == null ? "" : source.getText().toString();
+        String description = source.getContentDescription() == null ? "" : source.getContentDescription().toString();
+        String nText = ccNormalize(text);
+        String nDesc = ccNormalize(description);
         for (String label : POST_LABELS) {
-            if (text.equalsIgnoreCase(label) || description.equalsIgnoreCase(label)) return true;
+            String nLabel = ccNormalize(label);
+            if (nText.equals(nLabel) || nDesc.equals(nLabel)) return true;
         }
         return false;
     }
