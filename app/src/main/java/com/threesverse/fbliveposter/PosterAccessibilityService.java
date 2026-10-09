@@ -505,10 +505,65 @@ public class PosterAccessibilityService extends AccessibilityService {
             return;
         }
 
-        if (CampaignStore.STAGE_OPEN_GROUP.equals(stage)
-                || CampaignStore.STAGE_OPEN_COMPOSER.equals(stage)) {
+        if (CampaignStore.STAGE_OPEN_GROUP.equals(stage)) {
+            // v0.7.4 BUGFIX (owner: "har jagah click kar raha hai, jo kaam hai
+            // wo nahi kar raha"): OPEN_GROUP used to be handled identically to
+            // OPEN_COMPOSER — it hunted for a composer on whatever screen
+            // Facebook had open. On the FEED that match is the TIMELINE
+            // composer ("What's on your mind?"), so the campaign text was
+            // typed into the personal-profile composer and the group was never
+            // navigated to. OPEN_GROUP is now a pure ROUTER: URL targets go
+            // straight to OPEN_COMPOSER (the deep link already landed inside
+            // the group), name targets go to NAV_GROUPS (jump / drawer walk,
+            // then FIND_GROUP by name).
+            JSONObject target = CampaignStore.selectedTargetAt(this,
+                    p.getInt(CampaignStore.KEY_INDEX, 0));
+            boolean urlTarget = target != null
+                    && CampaignStore.TYPE_URL.equals(target.optString("t"));
+            setStage(p, urlTarget
+                    ? CampaignStore.STAGE_OPEN_COMPOSER
+                    : CampaignStore.STAGE_NAV_GROUPS);
+            scheduleProcess(600L);
+            return;
+        }
+
+        if (CampaignStore.STAGE_OPEN_COMPOSER.equals(stage)) {
+            // v0.7.4 guard: if the FEED bottom-nav tab is the selected
+            // destination, the only composer on screen is the TIMELINE
+            // composer. Clicking it posts the campaign message to the
+            // personal profile — never do it. Recover instead: URL targets
+            // re-fire their deep link, name targets go back to navigation.
+            if (isFeedTabSelected(root)) {
+                setNavTrace("act=composer-feedguard");
+                long now = System.currentTimeMillis();
+                if (now - p.getLong(CampaignStore.KEY_WEBJUMP_AT, 0L) > 15000L) {
+                    p.edit().putLong(CampaignStore.KEY_WEBJUMP_AT, now).apply();
+                    JSONObject target = CampaignStore.selectedTargetAt(this,
+                            p.getInt(CampaignStore.KEY_INDEX, 0));
+                    if (target != null && CampaignStore.TYPE_URL.equals(target.optString("t"))) {
+                        String url = target.optString("v", "");
+                        if (!url.isEmpty()) {
+                            Intent jump = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                            jump.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                            jump.setPackage(p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, ""));
+                            try {
+                                startActivity(jump);
+                            } catch (Exception ignored) {
+                            }
+                        }
+                    } else {
+                        setStage(p, CampaignStore.STAGE_NAV_GROUPS);
+                    }
+                }
+                scheduleProcess(2000L);
+                return;
+            }
             AccessibilityNodeInfo composer = findByLabels(root, COMPOSER_LABELS, false);
-            if (composer != null && clickNodeOrParent(composer)) {
+            // v0.7.4: visibility guard — BFS also returns off-screen composer
+            // nodes with stale bounds; tapping those was another random-tap
+            // source on transition frames.
+            if (composer != null && isVisibleOnScreen(root, composer)
+                    && clickNodeOrParent(composer)) {
                 setStage(p, CampaignStore.STAGE_FILL_COMPOSER);
                 scheduleProcess(1400);
             } else {
@@ -739,10 +794,20 @@ public class PosterAccessibilityService extends AccessibilityService {
                 }
                 // Owner screenshot: this FB build renders Feed as the second
                 // bottom icon but exposes no Feed node. Tap that real icon.
-                if (stageTimedOutSince(p, 1800L) && tapRelative(root, 0.25f, 0.955f, "Feed tab")) {
+                // v0.7.4 blind-tap governor: coordinate fallbacks are the
+                // #1 source of "har jagah click kar raha hai" — they used to
+                // fire on ANY unrecognized screen every ~1.8s with no cap.
+                // Now: main-chrome gate + max 2 per group + >=5s spacing.
+                if (stageTimedOutSince(p, 1800L)
+                        && now - p.getLong(CampaignStore.KEY_COORD_TAP_AT, 0L) >= 5000L
+                        && p.getInt(CampaignStore.KEY_FEEDTAB_TAP_ATTEMPTS, 0) < 2
+                        && mainChromeVisible(root)
+                        && tapRelative(root, 0.25f, 0.955f, "Feed tab")) {
                     p.edit()
                             .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
                             .putInt(CampaignStore.KEY_COORD_NAV_STEP, 1)
+                            .putInt(CampaignStore.KEY_FEEDTAB_TAP_ATTEMPTS,
+                                    p.getInt(CampaignStore.KEY_FEEDTAB_TAP_ATTEMPTS, 0) + 1)
                             .putLong(CampaignStore.KEY_COORD_TAP_AT, now)
                             .putLong(CampaignStore.KEY_STAGE_SINCE, now)
                             .apply();
@@ -866,8 +931,13 @@ public class PosterAccessibilityService extends AccessibilityService {
             // Owner screenshot: hamburger is visibly top-left (not a hidden
             // bottom Menu tab), while accessibility exposes neither label.
             // Use the visible control's relative location, never a deep link.
+            // v0.7.4 governor: same main-chrome gate + >=5s spacing as the
+            // feed-tab tap — no blind taps on unknown screens, ever.
             int attempts = p.getInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, 0);
-            if (attempts < 2 && tapRelative(root, 0.065f, 0.065f, "Facebook drawer")) {
+            if (attempts < 2
+                    && now - p.getLong(CampaignStore.KEY_COORD_TAP_AT, 0L) >= 5000L
+                    && mainChromeVisible(root)
+                    && tapRelative(root, 0.065f, 0.065f, "Facebook drawer")) {
                 p.edit()
                         .putInt(CampaignStore.KEY_COORD_NAV_STEP, 2)
                         .putLong(CampaignStore.KEY_COORD_TAP_AT, now)
@@ -933,6 +1003,65 @@ public class PosterAccessibilityService extends AccessibilityService {
 
     private boolean onMenuScreen(AccessibilityNodeInfo root) {
         return findByLabels(root, MENU_SCREEN_HINTS, false) != null;
+    }
+
+    /** v0.7.4: is the FEED bottom-nav tab the currently selected destination?
+     * If yes, every composer hint on screen belongs to the TIMELINE composer
+     * ("What's on your mind?") — clicking it would type the campaign post
+     * onto the personal profile instead of a group. */
+    private boolean isFeedTabSelected(AccessibilityNodeInfo root) {
+        AccessibilityNodeInfo feed = findByLabels(root, FEEDS_LABELS, true);
+        return feed != null && feed.isVisibleToUser() && feed.isSelected();
+    }
+
+    /** v0.7.4 BLIND-TAP GOVERNOR: coordinate fallbacks (fixed-fraction taps)
+     * may only fire while the screen still looks like Facebook's main chrome
+     * — a feed signal, the menu/drawer, or at least a bottom-nav structure.
+     * On truly unknown screens (photo viewer, profile, search, video, another
+     * app layer) a fraction-of-window tap lands on an arbitrary control, which
+     * is exactly the owner's "chutiyon ki tarah har jagah click" report.
+     * When this returns false the engine waits silently; the stage timeout
+     * then skips the group cleanly instead of spraying taps. */
+    private boolean mainChromeVisible(AccessibilityNodeInfo root) {
+        if (onFeedScreen(root)) return true;
+        if (onMenuScreen(root)) return true;
+        if (findByLabels(root, FEEDS_LABELS, true) != null) return true;
+        if (findByLabels(root, MENU_LABELS, true) != null) return true;
+        return bottomNavPresent(root);
+    }
+
+    /** Bounded scan: are there at least 2 selectable/clickable controls in the
+     * bottom 12% band of the window? That is Facebook's bottom navigation —
+     * present on every main screen, absent on overlay screens (composer,
+     * photo viewer, video). Cheap guard that a fraction-tap at the bottom
+     * can only hit a real nav item. */
+    private boolean bottomNavPresent(AccessibilityNodeInfo root) {
+        android.graphics.Rect win = new android.graphics.Rect();
+        root.getBoundsInScreen(win);
+        if (win.isEmpty()) return false;
+        int bandTop = win.top + Math.round(win.height() * 0.86f);
+        Deque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
+        queue.add(root);
+        int visited = 0;
+        int found = 0;
+        long deadline = System.nanoTime() + LOOKUP_BUDGET_NS;
+        while (!queue.isEmpty() && visited++ < MAX_LOOKUP_NODES
+                && System.nanoTime() < deadline) {
+            AccessibilityNodeInfo node = queue.removeFirst();
+            android.graphics.Rect r = new android.graphics.Rect();
+            node.getBoundsInScreen(r);
+            if (!r.isEmpty() && r.centerY() >= bandTop && r.centerY() <= win.bottom
+                    && r.width() > 8 && r.height() > 8
+                    && (node.isClickable() || node.isSelected())) {
+                found++;
+                if (found >= 2) return true;
+            }
+            for (int i = 0; i < node.getChildCount(); i++) {
+                AccessibilityNodeInfo child = node.getChild(i);
+                if (child != null) queue.addLast(child);
+            }
+        }
+        return false;
     }
 
     /** v0.6.3 bottom-nav guard: the Menu TAB lives in the bottom 25% of the
@@ -1091,6 +1220,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                         .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
                         .putLong(CampaignStore.KEY_COORD_TAP_AT, 0L)
                         .putInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, 0)
+                        .putInt(CampaignStore.KEY_FEEDTAB_TAP_ATTEMPTS, 0)
                         .apply();
                 return;
             }
@@ -1104,6 +1234,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                     .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
                     .putLong(CampaignStore.KEY_COORD_TAP_AT, 0L)
                     .putInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, 0)
+                    .putInt(CampaignStore.KEY_FEEDTAB_TAP_ATTEMPTS, 0)
                     .apply();
             intent = context.getPackageManager().getLaunchIntentForPackage(selectedPackage);
             if (intent == null) {

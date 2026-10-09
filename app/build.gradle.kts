@@ -15,8 +15,8 @@ android {
         applicationId = "com.threesverse.liveposter"
         minSdk = 26
         targetSdk = 35
-        versionCode = 28
-        versionName = "0.7.3"
+        versionCode = 29
+        versionName = "0.7.4"
         manifestPlaceholders["appName"] = "FB Live Group Poster"
     }
 
@@ -44,12 +44,10 @@ android {
             signingConfig = if (System.getenv("FB_KEYSTORE_B64") != null)
                 signingConfigs.getByName("release") else signingConfigs.getByName("debug")
         }
-        create("fresh") {
-            initWith(getByName("release"))
-            applicationIdSuffix = ".fresh"
-            versionNameSuffix = "-fresh"
-            manifestPlaceholders["appName"] = "FB Live Group Poster Fresh"
-        }
+        // v0.7.4: the FreshInstall build type is REMOVED (owner order — the
+        // separate ".fresh" app confused installs; the release cert is stable
+        // since v0.4.7 and over-install works, so a fresh-identity variant is
+        // no longer needed).
     }
 }
 

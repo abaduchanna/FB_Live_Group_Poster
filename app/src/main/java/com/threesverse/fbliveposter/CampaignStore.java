@@ -35,6 +35,7 @@ final class CampaignStore {
     static final String KEY_COORD_NAV_STEP = "coord_nav_step"; // 0=none, 1=Feed tapped, 2=drawer tapped
     static final String KEY_COORD_TAP_AT = "coord_tap_at";
     static final String KEY_DRAWER_TAP_ATTEMPTS = "drawer_tap_attempts";
+    static final String KEY_FEEDTAB_TAP_ATTEMPTS = "feedtab_tap_attempts"; // v0.7.4: cap blind bottom-nav coordinate taps per group
     static final String KEY_WEBJUMP_AT = "webjump_at";         // v0.7.1: last deep-link jump time (rate-limit direct Groups-screen jumps)
     static final String KEY_YGTAB_AT = "yg_tab_at";            // v0.7.1: "Your groups" tab click done for the current FIND_GROUP stage (0 = not yet)
 
@@ -197,6 +198,7 @@ final class CampaignStore {
                 .putInt(KEY_COORD_NAV_STEP, 0)
                 .putLong(KEY_COORD_TAP_AT, 0L)
                 .putInt(KEY_DRAWER_TAP_ATTEMPTS, 0)
+                .putInt(KEY_FEEDTAB_TAP_ATTEMPTS, 0)
                 .apply();
     }
 }

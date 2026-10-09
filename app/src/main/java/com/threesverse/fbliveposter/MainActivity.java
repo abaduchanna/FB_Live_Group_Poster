@@ -767,6 +767,7 @@ public class MainActivity extends Activity {
                 .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
                 .putLong(CampaignStore.KEY_COORD_TAP_AT, 0L)
                 .putInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, 0)
+                .putInt(CampaignStore.KEY_FEEDTAB_TAP_ATTEMPTS, 0)
                 .apply();
 
         facebookAppStatus.setText("Import app: " + facebookLabel(packageName));
@@ -818,6 +819,7 @@ public class MainActivity extends Activity {
                 .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
                 .putLong(CampaignStore.KEY_COORD_TAP_AT, 0L)
                 .putInt(CampaignStore.KEY_DRAWER_TAP_ATTEMPTS, 0)
+                .putInt(CampaignStore.KEY_FEEDTAB_TAP_ATTEMPTS, 0)
                 .apply();
 
         facebookAppStatus.setText("Facebook app: " + facebookLabel(facebookPackage));
