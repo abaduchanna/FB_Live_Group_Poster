@@ -6,7 +6,13 @@ An open-source Android proof of concept that shares a Facebook Live link to a us
 
 > **Important:** Meta removed the Facebook Groups API and `publish_to_groups` on April 22, 2024. This project therefore uses Android Accessibility to assist with the visible Facebook UI. It is not an official Facebook integration, selectors can break when Facebook changes its app, and use may be restricted by Facebook or individual group rules.
 
-## What works in v0.4.0
+## What works in v0.7.4
+
+- **Direct jump to Groups** — v0.7.1+ opens the Facebook app and jumps straight to the Groups screen (app link); the old drawer/coordinate walk stays as a fallback. Web Poster engine: **m.facebook.com DOM automation** in a WebView (with DOM-snapshot diagnostics) as a second route.
+- **CCleaner-grade accessibility engine** (v0.7.3) — normalized letter-core label matching, focus-then-click tiers, stale-click freshness duplicate-guard, and tap strokes timed by `ViewConfiguration` so taps register reliably.
+- **Misfire guards** (v0.7.4) — off-screen/GONE nodes are never tapped and timeline posts are guarded, so the poster cannot fire into a random feed spot.
+
+Plus everything from earlier versions:
 
 - **Import your groups from Facebook** — one tap opens your Facebook app; the accessibility service reaches the Groups screen, scrolls it, and reads the visible group names into the app. No Groups API needed (Meta removed it in April 2024).
 - **Checkbox group list** — every imported group gets a checkbox, plus **Select all**, a live "N of M selected" counter, manual URL entries, and a clear-list button.
