@@ -6,8 +6,12 @@ An open-source Android proof of concept that shares a Facebook Live link to a us
 
 > **Important:** Meta removed the Facebook Groups API and `publish_to_groups` on April 22, 2024. This project therefore uses Android Accessibility to assist with the visible Facebook UI. It is not an official Facebook integration, selectors can break when Facebook changes its app, and use may be restricted by Facebook or individual group rules.
 
-## What works in v0.7.5
+## What works in v0.8.0
 
+- **Automatic media attach in every group** (v0.8.0) — attach photos/videos once on the main screen (multiple allowed), and the Web Poster adds them to the composer in EVERY selected group by itself: it taps FB's **Photo/video** button with a real injected touch and hands your files to the chooser instantly (the system picker never opens), waits for the upload, then presses Post. Images also have a DataTransfer DOM-injection fallback. The attached media is remembered across restarts until you clear it.
+- **Text + hashtags posted everywhere** (v0.8.0) — the post text (message + hashtags) is now SAVED: type it once and it stays filled after app restarts. The live link is optional — a post needs at least one of link / text / media.
+- **Facebook-app imported groups now post via the web engine too** (v0.8.0) — groups imported by NAME through the Facebook app are resolved with Facebook group search (m.facebook.com) and posted like URL groups, so both engines work on the same selected list.
+- **Group list update** (v0.8.0) — the web import scrolls the groups page and re-collects until two consecutive rounds bring no NEW links, so the list reflects your full group membership, not just the first screenful.
 - **Multi-file attach in the Web Poster** (v0.7.5) — tapping **Photo/video** in the m.facebook.com composer now opens the system file picker with **multiple selection** for photos and videos (previously it did nothing or fell back to a single-file picker). Pick as many files as you like and Facebook uploads them all with your post.
 - **Faster posting: delay minimum 45s → 10s** (v0.7.5) — set any delay from 10 seconds up. Default for new installs is 15s, and a saved 30s delay auto-migrates to 15s on first launch of this version. Web Poster honors the same 10s minimum.
 
@@ -21,7 +25,7 @@ Plus everything from earlier versions:
 - **Checkbox group list** — every imported group gets a checkbox, plus **Select all**, a live "N of M selected" counter, manual URL entries, and a clear-list button.
 - **Auto post to selected groups** — one button posts your live link to exactly the groups you ticked, one by one, with a safety delay.
 - Works with **Facebook, Facebook Lite and Facebook clones/mods** — the chooser scans every installed Facebook-family app and **always asks you which one to use**; it never silently picks one.
-- The message box starts **empty** — leave it empty to post just the live link.
+- **Post text + hashtags are saved** (v0.8.0) — the message box restores what you typed last time; leave it empty to post just the live link.
 - Paste a live link, or share a Facebook link to the app from another phone/app.
 - Fill the message plus the live link in each group's composer.
 - Default safer mode leaves the final **Post** tap to the user; optional experimental mode taps **Post** automatically and waits at least 10 seconds before the next group.

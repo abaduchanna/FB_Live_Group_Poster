@@ -3,6 +3,7 @@ package com.threesverse.fbliveposter;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
@@ -68,10 +69,14 @@ public class MainActivity extends Activity {
     private TextView status;
     private TextView facebookAppStatus;
     private TextView selectionCount;
+    private TextView mediaStatus;
     private LinearLayout groupListBox;
     private Button startButton;
     private boolean darkTheme;
     private boolean syncingUi;
+
+    /** v0.8.0: SAF result for the attach-photos/videos flow. */
+    private static final int REQ_PICK_MEDIA = 4201;
 
     // v0.6.0 guided setup card + tap-engine probe. The #1 cause of "nothing
     // clicks at all" turned out to be the accessibility service never actually
@@ -152,15 +157,31 @@ public class MainActivity extends Activity {
         facebookAppStatus.setPadding(0, dp(12), 0, 0);
         root.addView(facebookAppStatus);
 
-        root.addView(label("1. Live link"));
+        root.addView(label("1. Live link (optional if you typed a message or attached media)"));
         linkInput = input("Facebook live link", false);
         root.addView(linkInput);
 
-        root.addView(label("2. Message (leave empty to post only the live link)"));
-        messageInput = input("Message — optional", true);
+        root.addView(label("2. Post text — message + hashtags (saved)"));
+        messageInput = input("Type the post text / hashtags — optional", true);
         root.addView(messageInput);
 
-        root.addView(label("3. Groups — import from Facebook, then select"));
+        root.addView(label("3. Media (optional) — photos/videos for every post"));
+        Button mediaButton = button("Attach photos/videos (multiple allowed)");
+        mediaButton.setOnClickListener(v -> pickMedia());
+        root.addView(mediaButton);
+        mediaStatus = text("", 13, false);
+        mediaStatus.setPadding(0, dp(4), 0, 0);
+        root.addView(mediaStatus);
+        Button clearMediaButton = button("Clear attached media");
+        clearMediaButton.setOnClickListener(v -> {
+            CampaignStore.saveMediaUris(this, new ArrayList<>());
+            refreshMediaStatus();
+            Toast.makeText(this, "Attached media cleared", Toast.LENGTH_SHORT).show();
+        });
+        root.addView(clearMediaButton);
+        refreshMediaStatus();
+
+        root.addView(label("4. Groups — import from Facebook, then select"));
         Button importButton = button("Import groups from Facebook");
         importButton.setOnClickListener(v -> startImport());
         root.addView(importButton);
@@ -220,7 +241,7 @@ public class MainActivity extends Activity {
         listButtons.addView(clearButton);
         root.addView(listButtons);
 
-        root.addView(label("4. Safety delay"));
+        root.addView(label("5. Safety delay"));
         delayInput = input("Delay between groups (seconds)", false);
         delayInput.setInputType(InputType.TYPE_CLASS_NUMBER);
         root.addView(delayInput);
@@ -263,7 +284,9 @@ public class MainActivity extends Activity {
     private void loadSavedValues() {
         SharedPreferences p = CampaignStore.prefs(this);
         linkInput.setText(p.getString(CampaignStore.KEY_LINK, ""));
-        messageInput.setText(""); // message is always empty by default
+        // v0.8.0: the post text (message + hashtags) is SAVED — owner: "jo text
+        // hashtags ka text ho". Retyping it every launch was wasted work.
+        messageInput.setText(p.getString(CampaignStore.KEY_MESSAGE, ""));
         // v0.7.5: delay default 90 → 15 (owner: "30 sec wait ko reduce kar 10-15
         // sec kar de") + one-time 30 → 15 migration of the saved value.
         int savedDelay = p.getInt(CampaignStore.KEY_DELAY, 15);
@@ -730,16 +753,25 @@ public class MainActivity extends Activity {
 
     private void validateAndConfirm() {
         String link = linkInput.getText().toString().trim();
+        String message = messageInput.getText().toString().trim();
         List<JSONObject> selected = CampaignStore.selectedTargets(this);
+        boolean hasMedia = CampaignStore.hasMedia(this);
         int delay;
         try {
             delay = Integer.parseInt(delayInput.getText().toString().trim());
         } catch (NumberFormatException ignored) {
-            delay = 90;
+            delay = 15;
         }
 
-        if (!FACEBOOK_URL.matcher(link).find()) {
-            linkInput.setError("Paste a valid Facebook link");
+        // v0.8.0: the link is optional — a post needs at least ONE of
+        // link / message+hashtags / attached media (owner posts text +
+        // hashtags + video/image; the live link is not always wanted).
+        if (!link.isEmpty() && !FACEBOOK_URL.matcher(link).find()) {
+            linkInput.setError("Paste a valid Facebook link (or leave it empty)");
+            return;
+        }
+        if (link.isEmpty() && message.isEmpty() && !hasMedia) {
+            Toast.makeText(this, "Enter the link or the post text, or attach photos/videos first", Toast.LENGTH_LONG).show();
             return;
         }
         if (selected.isEmpty()) {
@@ -752,15 +784,100 @@ public class MainActivity extends Activity {
         }
 
         final int safeDelay = delay;
-        String mode = autoPostInput.isChecked()
-                ? "The app will fill the composer and also press Post."
-                : "The app will fill the composer; you press Post yourself.";
+        final boolean mediaRun = hasMedia;
+        String mode;
+        if (mediaRun) {
+            mode = "Attached photos/videos will be posted together with your text in every selected group via the Web poster engine (m.facebook.com).";
+        } else if (autoPostInput.isChecked()) {
+            mode = "The app will fill the composer and also press Post.";
+        } else {
+            mode = "The app will fill the composer; you press Post yourself.";
+        }
         new AlertDialog.Builder(this)
                 .setTitle("Start for " + selected.size() + " groups?")
                 .setMessage(mode + "\n\nYou are responsible for group rules and Facebook restrictions.")
                 .setNegativeButton("Cancel", null)
-                .setPositiveButton("Continue", (dialog, which) -> chooseFacebookApp(false, safeDelay))
+                .setPositiveButton("Continue", (dialog, which) -> {
+                    persistCampaignInputs(safeDelay);
+                    if (mediaRun) {
+                        // Media attach automation lives in the web engine — route there.
+                        Intent web = new Intent(this, WebPosterActivity.class);
+                        web.putExtra(WebPosterActivity.EXTRA_AUTO_START, true);
+                        startActivity(web);
+                    } else {
+                        chooseFacebookApp(false, safeDelay);
+                    }
+                })
                 .show();
+    }
+
+    /** v0.8.0: persist exactly what the user typed BEFORE handing the run to
+     * either engine, so the web poster sees the same link/message/delay. */
+    private void persistCampaignInputs(int delay) {
+        CampaignStore.prefs(this).edit()
+                .putString(CampaignStore.KEY_LINK, linkInput.getText().toString().trim())
+                .putString(CampaignStore.KEY_MESSAGE, messageInput.getText().toString().trim())
+                .putInt(CampaignStore.KEY_DELAY, delay)
+                .putBoolean(CampaignStore.KEY_AUTO_POST, autoPostInput.isChecked())
+                .apply();
+    }
+
+    // ================= MEDIA ATTACH (v0.8.0) =================
+
+    /** SAF document picker with multiple selection + persistable grants, so
+     * the chosen photos/videos survive reboots and are re-usable by the web
+     * poster for every group without asking again. */
+    private void pickMedia() {
+        try {
+            Intent pick = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+            pick.addCategory(Intent.CATEGORY_OPENABLE);
+            pick.setType("*/*");
+            pick.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"image/*", "video/*"});
+            pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+            startActivityForResult(pick, REQ_PICK_MEDIA);
+        } catch (Exception broken) {
+            Toast.makeText(this, "File picker not available: " + broken.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void refreshMediaStatus() {
+        if (mediaStatus == null) return;
+        int n = CampaignStore.loadMediaUris(this).size();
+        mediaStatus.setText(n == 0
+                ? "No media attached — the post will be text/link only"
+                : n + " photo/video file(s) attached — they will be added to every selected group's post");
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQ_PICK_MEDIA) return;
+        List<Uri> uris = new ArrayList<>();
+        try {
+            if (resultCode == RESULT_OK && data != null) {
+                ClipData clip = data.getClipData();
+                if (clip != null) {
+                    for (int i = 0; i < clip.getItemCount(); i++) {
+                        Uri u = clip.getItemAt(i).getUri();
+                        if (u != null) uris.add(u);
+                    }
+                } else if (data.getData() != null) {
+                    uris.add(data.getData());
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        for (Uri u : uris) {
+            try {
+                getContentResolver().takePersistableUriPermission(u, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored) {
+            }
+        }
+        CampaignStore.saveMediaUris(this, uris);
+        refreshMediaStatus();
+        if (!uris.isEmpty()) {
+            Toast.makeText(this, uris.size() + " file(s) attached — ye har selected group ke post me lagein gi", Toast.LENGTH_LONG).show();
+        }
     }
 
     private void beginImport(String packageName) {

@@ -2,6 +2,7 @@ package com.threesverse.fbliveposter;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.net.Uri;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -38,6 +39,7 @@ final class CampaignStore {
     static final String KEY_FEEDTAB_TAP_ATTEMPTS = "feedtab_tap_attempts"; // v0.7.4: cap blind bottom-nav coordinate taps per group
     static final String KEY_WEBJUMP_AT = "webjump_at";         // v0.7.1: last deep-link jump time (rate-limit direct Groups-screen jumps)
     static final String KEY_YGTAB_AT = "yg_tab_at";            // v0.7.1: "Your groups" tab click done for the current FIND_GROUP stage (0 = not yet)
+    static final String KEY_MEDIA_URIS = "media_uris_json";   // v0.8.0: ["content://..."] photos/videos attached to every post
 
     static final String STAGE_OPEN_GROUP = "open_group";
     static final String STAGE_NAV_GROUPS = "nav_groups";    // find + tap the Groups entry inside Facebook
@@ -174,6 +176,37 @@ final class CampaignStore {
             p.edit().remove(KEY_IMPORT_RESULT).apply();
         }
         return names;
+    }
+
+    // ----- attached media (v0.8.0: photos/videos posted into every selected group) -----
+
+    static List<Uri> loadMediaUris(Context context) {
+        List<Uri> result = new ArrayList<>();
+        String raw = prefs(context).getString(KEY_MEDIA_URIS, "");
+        if (raw.isEmpty()) return result;
+        try {
+            JSONArray arr = new JSONArray(raw);
+            for (int i = 0; i < arr.length(); i++) {
+                String v = arr.optString(i, "").trim();
+                if (!v.isEmpty()) result.add(Uri.parse(v));
+            }
+        } catch (Exception ignored) {
+        }
+        return result;
+    }
+
+    static void saveMediaUris(Context context, List<Uri> uris) {
+        JSONArray arr = new JSONArray();
+        if (uris != null) {
+            for (Uri u : uris) {
+                if (u != null) arr.put(u.toString());
+            }
+        }
+        prefs(context).edit().putString(KEY_MEDIA_URIS, arr.toString()).apply();
+    }
+
+    static boolean hasMedia(Context context) {
+        return !loadMediaUris(context).isEmpty();
     }
 
     static String postText(Context context) {
