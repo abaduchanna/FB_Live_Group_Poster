@@ -15,8 +15,8 @@ android {
         applicationId = "com.threesverse.liveposter"
         minSdk = 26
         targetSdk = 35
-        versionCode = 31
-        versionName = "0.8.0"
+        versionCode = 32
+        versionName = "0.9.0"
         manifestPlaceholders["appName"] = "FB Live Group Poster"
     }
 

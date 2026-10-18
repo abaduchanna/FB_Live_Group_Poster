@@ -6,8 +6,12 @@ An open-source Android proof of concept that shares a Facebook Live link to a us
 
 > **Important:** Meta removed the Facebook Groups API and `publish_to_groups` on April 22, 2024. This project therefore uses Android Accessibility to assist with the visible Facebook UI. It is not an official Facebook integration, selectors can break when Facebook changes its app, and use may be restricted by Facebook or individual group rules.
 
-## What works in v0.8.0
+## What works in v0.9.0
 
+- **CCleaner-grade click engine v2** (v0.9.0) — a tap counts as successful ONLY when Android reports the gesture **completed** (not just queued), every tap re-reads **fresh node bounds** before landing, and every important click (Groups entry, group row, composer, Post) is **verified by its effect** on a fresh screen scan — a missed tap gets one automatic re-tap instead of silently advancing and stalling for 45 seconds.
+- **Effect-verified text fill** (v0.9.0) — after the post text is set, the engine re-reads the composer field; if Facebook's Litho editor silently dropped it (SET_TEXT reports "true" but the box is empty), it focuses and re-sets the text before pressing Post — no more empty posts.
+- **Gesture swipe scroll** (v0.9.0) — lists that quietly reject the accessibility scroll action now get a **real-finger swipe** instead, so group-list import and in-list scrolling keep working on every Facebook build.
+- **Best-match clicking** (v0.9.0) — label lookup no longer taps the first tree match; it **scores** candidates (visible + clickable ancestor + tight bounds) and taps the best one — the exact control that was meant, not a stale off-screen container.
 - **Automatic media attach in every group** (v0.8.0) — attach photos/videos once on the main screen (multiple allowed), and the Web Poster adds them to the composer in EVERY selected group by itself: it taps FB's **Photo/video** button with a real injected touch and hands your files to the chooser instantly (the system picker never opens), waits for the upload, then presses Post. Images also have a DataTransfer DOM-injection fallback. The attached media is remembered across restarts until you clear it.
 - **Text + hashtags posted everywhere** (v0.8.0) — the post text (message + hashtags) is now SAVED: type it once and it stays filled after app restarts. The live link is optional — a post needs at least one of link / text / media.
 - **Facebook-app imported groups now post via the web engine too** (v0.8.0) — groups imported by NAME through the Facebook app are resolved with Facebook group search (m.facebook.com) and posted like URL groups, so both engines work on the same selected list.

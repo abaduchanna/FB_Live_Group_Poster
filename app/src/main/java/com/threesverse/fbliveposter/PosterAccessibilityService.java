@@ -31,6 +31,8 @@ import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 public class PosterAccessibilityService extends AccessibilityService {
     private static final List<String> COMPOSER_LABELS = Arrays.asList(
@@ -114,6 +116,9 @@ public class PosterAccessibilityService extends AccessibilityService {
     volatile static String lastGestureResult = "";
     private static int tapFailStreak = 0;
     private static boolean gestureBroken = false;
+    // v0.9.0 CCleaner-grade click v2: ek waqt me sirf EK gesture — doosra
+    // dispatch system pehle ko CANCEL karwata hai (dono taps mar jate hain).
+    private static volatile boolean gestureBusy = false;
 
     // v0.6.3 navigation trace — updated on every navigateTowardGroups tick.
     // Same-process read by the MainActivity status line: a report like
@@ -498,6 +503,10 @@ public class PosterAccessibilityService extends AccessibilityService {
         String stage = p.getString(CampaignStore.KEY_STAGE, CampaignStore.STAGE_OPEN_COMPOSER);
         long lastAction = p.getLong(CampaignStore.KEY_LAST_ACTION, 0L);
         if (System.currentTimeMillis() - lastAction < 800) return;
+        // v0.9.0: click-verify window chal rahi ho (tap → 700ms → verify →
+        // re-tap → 900ms) to naya tick-click re-entry double-tap banata —
+        // poora confirm window block.
+        if (System.currentTimeMillis() - p.getLong(CampaignStore.KEY_CONFIRM_AT, 0L) < 2600L) return;
 
         if (!CampaignStore.STAGE_WAIT_NEXT.equals(stage) && stageTimedOut(p, STAGE_TIMEOUT_MS)) {
             toast("Group skipped — unrecognized screen. Next group…");
@@ -562,10 +571,28 @@ public class PosterAccessibilityService extends AccessibilityService {
             // v0.7.4: visibility guard — BFS also returns off-screen composer
             // nodes with stale bounds; tapping those was another random-tap
             // source on transition frames.
-            if (composer != null && isVisibleOnScreen(root, composer)
-                    && clickNodeOrParent(composer)) {
-                setStage(p, CampaignStore.STAGE_FILL_COMPOSER);
-                scheduleProcess(1400);
+            // v0.9.0 CCleaner confirm-after-click: queue-OK par blind advance
+            // BAND — composer tap ka effect (editable field) fresh tree par
+            // verify hota hai; miss → ek fresh re-tap. Yehi "useless click"
+            // class thi: tap cancel → stage aage → agla element kabhi nahi
+            // milta → 45s skip.
+            if (composer != null && isVisibleOnScreen(root, composer)) {
+                p.edit().putLong(CampaignStore.KEY_CONFIRM_AT, System.currentTimeMillis()).apply();
+                clickAndConfirm(
+                        () -> {
+                            AccessibilityNodeInfo r = getRootInActiveWindow();
+                            if (r == null) return null;
+                            AccessibilityNodeInfo c = findByLabels(r, COMPOSER_LABELS, false);
+                            return (c != null && isVisibleOnScreen(r, c)) ? c : null;
+                        },
+                        () -> {
+                            AccessibilityNodeInfo r = getRootInActiveWindow();
+                            return r != null && findEditable(r) != null;
+                        },
+                        () -> {
+                            setStage(p, CampaignStore.STAGE_FILL_COMPOSER);
+                            scheduleProcess(1400);
+                        });
             } else {
                 scheduleProcess(1800L);
             }
@@ -608,13 +635,34 @@ public class PosterAccessibilityService extends AccessibilityService {
                 return;
             }
             AccessibilityNodeInfo row = findGroupRow(root, name);
-            if (row != null && isVisibleOnScreen(root, row) && clickNodeOrParent(row)) {
-                e.remove(CampaignStore.KEY_SCAN_COUNT)
-                        .remove(CampaignStore.KEY_NO_NEW_SCANS)
-                        .apply();
-                setStage(p, CampaignStore.STAGE_OPEN_COMPOSER);
-                toast("Found group: " + name);
-                scheduleProcess(1500);
+            if (row != null && isVisibleOnScreen(root, row)) {
+                // v0.9.0: group-row click ka EFFECT confirm — group kholne ka
+                // koi signal (composer hint / list se hat jana) fresh tree par;
+                // miss → fresh re-tap. Blind advance = "group not found" skip.
+                p.edit().putLong(CampaignStore.KEY_CONFIRM_AT, System.currentTimeMillis()).apply();
+                clickAndConfirm(
+                        () -> {
+                            AccessibilityNodeInfo r = getRootInActiveWindow();
+                            if (r == null) return null;
+                            AccessibilityNodeInfo rr = findGroupRow(r, name);
+                            return (rr != null && isVisibleOnScreen(r, rr)) ? rr : null;
+                        },
+                        () -> {
+                            AccessibilityNodeInfo r = getRootInActiveWindow();
+                            if (r == null) return false;
+                            if (findByLabels(r, COMPOSER_LABELS, false) != null) return true;
+                            return !onGroupsScreen(r);
+                        },
+                        () -> {
+                            SharedPreferences pe = CampaignStore.prefs(this);
+                            pe.edit()
+                                    .remove(CampaignStore.KEY_SCAN_COUNT)
+                                    .remove(CampaignStore.KEY_NO_NEW_SCANS)
+                                    .apply();
+                            setStage(pe, CampaignStore.STAGE_OPEN_COMPOSER);
+                            toast("Found group: " + name);
+                            scheduleProcess(1500);
+                        });
             } else {
                 // v0.7.1 recovery order after the direct jump:
                 // (1) 8s on an unrecognized screen → drawer/coordinate path as fallback;
@@ -674,15 +722,11 @@ public class PosterAccessibilityService extends AccessibilityService {
                 Bundle args = new Bundle();
                 args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
                         CampaignStore.postText(this));
-                if (editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)) {
-                    setStage(p, CampaignStore.STAGE_PRESS_POST);
-                    toast(p.getBoolean(CampaignStore.KEY_AUTO_POST, false)
-                            ? "Message ready — posting…"
-                            : "Message ready — press Post manually");
-                    if (p.getBoolean(CampaignStore.KEY_AUTO_POST, false)) scheduleProcess(1200);
-                } else {
-                    scheduleProcess(1800L);
-                }
+                editable.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                // v0.9.0 CCleaner hard-fail rule: SET_TEXT ka "true" evidence
+                // NAHI — Litho composer silent no-op karta hai. 650ms baad
+                // FRESH field ka text verify; missing → focus + re-set.
+                handler.postDelayed(() -> verifyFill(p, 1), 650);
             } else {
                 scheduleProcess(1800L);
             }
@@ -692,11 +736,13 @@ public class PosterAccessibilityService extends AccessibilityService {
         if (CampaignStore.STAGE_PRESS_POST.equals(stage)
                 && p.getBoolean(CampaignStore.KEY_AUTO_POST, false)) {
             AccessibilityNodeInfo post = findByLabels(root, POST_LABELS, true);
-            if (post != null && clickNodeOrParent(post)) {
-                setStage(p, CampaignStore.STAGE_WAIT_NEXT);
-                int delaySeconds = p.getInt(CampaignStore.KEY_DELAY, 15);
-                toast("Posted. Next group in " + delaySeconds + " seconds");
-                handler.postDelayed(this::advanceToNextGroup, delaySeconds * 1000L);
+            if (post != null) {
+                p.edit().putLong(CampaignStore.KEY_CONFIRM_AT, System.currentTimeMillis()).apply();
+                clickNodeOrParent(post);
+                // v0.9.0 confirm: Post click ka effect = Post button GONE /
+                // disabled (composer band). Upload ke doran button dead hota
+                // hai — re-tap no-op, double-post ka risk nahi.
+                handler.postDelayed(() -> confirmPost(p, 1), 1200);
             } else {
                 scheduleProcess(1800L);
             }
@@ -865,15 +911,35 @@ public class PosterAccessibilityService extends AccessibilityService {
             }
 
             if (groupsVisible && (smClicks > 0 || !smVisible)
-                    && stageTimedOutSince(p, 1500L) && clickNodeOrParent(groups)) {
+                    && stageTimedOutSince(p, 1500L)) {
+                // v0.9.0: Groups click ka EFFECT (Groups screen render) confirm —
+                // miss par fresh re-tap. Pre-set 5s debounce re-entry double-tap
+                // rokta hai jab tak confirm chal raha hai.
                 p.edit()
                         .putLong(CampaignStore.KEY_GROUPS_CLICKED_AT, System.currentTimeMillis())
-                        .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
-                        .putInt(CampaignStore.KEY_SEEMORE_CLICKS, 0)
-                        .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
+                        .putLong(CampaignStore.KEY_CONFIRM_AT, System.currentTimeMillis())
                         .apply();
-                setNavTrace("menu=1 grp=1 act=groups-click");
-                arriveAtGroupsScreen(p);
+                clickAndConfirm(
+                        () -> {
+                            AccessibilityNodeInfo r = getRootInActiveWindow();
+                            if (r == null) return null;
+                            AccessibilityNodeInfo g = findByLabels(r, GROUPS_LABELS, true);
+                            return (g != null && isVisibleOnScreen(r, g)) ? g : null;
+                        },
+                        () -> {
+                            AccessibilityNodeInfo r = getRootInActiveWindow();
+                            return r != null && onGroupsScreen(r);
+                        },
+                        () -> {
+                            SharedPreferences pe = CampaignStore.prefs(this);
+                            pe.edit()
+                                    .putBoolean(CampaignStore.KEY_NAV_FEEDS_DONE, true)
+                                    .putInt(CampaignStore.KEY_SEEMORE_CLICKS, 0)
+                                    .putInt(CampaignStore.KEY_COORD_NAV_STEP, 0)
+                                    .apply();
+                            setNavTrace("menu=1 grp=1 act=groups-click");
+                            arriveAtGroupsScreen(pe);
+                        });
                 return;
             }
             // STEP 3 (owner: "see more ko pehle click karna hai"): Groups abhi
@@ -1102,7 +1168,9 @@ public class PosterAccessibilityService extends AccessibilityService {
         for (AccessibilityNodeInfo node : candidates) {
             if (node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return true;
         }
-        return false;
+        // v0.9.0: Litho lists ACTION_SCROLL_FORWARD chup-chaap reject karti
+        // hain — real-finger swipe fallback (CCleaner gesture style).
+        return gestureSwipeUp(root);
     }
 
     /** Import scan: same ranked order, magar idle ticks pe candidate rotate hota hai. */
@@ -1114,7 +1182,47 @@ public class PosterAccessibilityService extends AccessibilityService {
             AccessibilityNodeInfo node = candidates.get((start + i) % candidates.size());
             if (node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)) return true;
         }
-        return false;
+        return gestureSwipeUp(root);
+    }
+
+    /** v0.9.0: gesture swipe — ACTION_SCROLL_FORWARD reject par asli ungli
+     * wali scroll (latch-based completion, tap jaisa hi). */
+    private boolean gestureSwipeUp(AccessibilityNodeInfo root) {
+        android.graphics.Rect win = new android.graphics.Rect();
+        root.getBoundsInScreen(win);
+        if (win.isEmpty() || gestureBusy) return false;
+        int cx = win.centerX();
+        int y1 = win.top + Math.round(win.height() * 0.72f);
+        int y2 = win.top + Math.round(win.height() * 0.28f);
+        android.graphics.Path pt = new android.graphics.Path();
+        pt.moveTo(cx, y1);
+        pt.lineTo(cx, y2);
+        final GestureDescription gesture = new GestureDescription.Builder()
+                .addStroke(new GestureDescription.StrokeDescription(pt, 0, 320L))
+                .build();
+        final Handler h = new Handler(Looper.getMainLooper());
+        final CountDownLatch latch = new CountDownLatch(1);
+        final boolean[] completed = {false};
+        gestureBusy = true;
+        dispatchGesture(gesture, new GestureResultCallback() {
+            @Override
+            public void onCompleted(GestureDescription g) {
+                completed[0] = true;
+                gestureBusy = false;
+                latch.countDown();
+            }
+
+            @Override
+            public void onCancelled(GestureDescription g) {
+                gestureBusy = false;
+                latch.countDown();
+            }
+        }, h);
+        try {
+            latch.await(700, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {
+        }
+        return completed[0];
     }
 
     private List<AccessibilityNodeInfo> scrollCandidates(AccessibilityNodeInfo root) {
@@ -1295,8 +1403,14 @@ public class PosterAccessibilityService extends AccessibilityService {
         // compare letter-cores (see ccNormalize). exact = letter-core
         // equality ("Menu." still matches "Menu"), fuzzy = letter-core
         // containment ("Write something…" hits "Write something").
+        // v0.9.0 CCleaner validators-ladder: BFS ka PEHLA match nahi — BEST
+        // match. Score = visible (sab se bara signal) + clickable ancestor
+        // (row par handler hota hai) + chhota bounds (specific node). Pehla
+        // BFS match aksar stale/off-screen container hota tha = useless tap.
         String[] nLabels = new String[labels.size()];
         for (int i = 0; i < labels.size(); i++) nLabels[i] = ccNormalize(labels.get(i));
+        AccessibilityNodeInfo best = null;
+        int bestScore = -1;
         Deque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
         queue.add(root);
         int visited = 0;
@@ -1308,20 +1422,41 @@ public class PosterAccessibilityService extends AccessibilityService {
             String desc = node.getContentDescription() == null ? "" : node.getContentDescription().toString();
             String nText = ccNormalize(text);
             String nDesc = ccNormalize(desc);
-            for (int li = 0; li < nLabels.length; li++) {
+            boolean match = false;
+            for (int li = 0; li < nLabels.length && !match; li++) {
                 String nLabel = nLabels[li];
                 if (nLabel.isEmpty()) continue;
                 if ((exact && (nText.equals(nLabel) || nDesc.equals(nLabel))) ||
                         (!exact && (nText.contains(nLabel) || nDesc.contains(nLabel)))) {
-                    return node;
+                    match = true;
                 }
+            }
+            if (match) {
+                int score = 1;
+                boolean visible = false;
+                try {
+                    visible = node.isVisibleToUser();
+                } catch (Exception ignored) {
+                }
+                if (visible) score += 6;
+                if (node.isClickable() || hasClickableAncestor(node, 3)) score += 3;
+                android.graphics.Rect r = new android.graphics.Rect();
+                node.getBoundsInScreen(r);
+                if (!r.isEmpty()) {
+                    score += (int) Math.max(0, 4 - Math.sqrt((double) r.width() * r.height()) / 120d);
+                }
+                if (score > bestScore) {
+                    bestScore = score;
+                    best = node;
+                }
+                if (bestScore >= 12) break; // visible+clickable+specific = perfect
             }
             for (int i = 0; i < node.getChildCount(); i++) {
                 AccessibilityNodeInfo child = node.getChild(i);
                 if (child != null) queue.addLast(child);
             }
         }
-        return null;
+        return best;
     }
 
     private AccessibilityNodeInfo findEditable(AccessibilityNodeInfo root) {
@@ -1460,6 +1595,94 @@ public class PosterAccessibilityService extends AccessibilityService {
         return false;
     }
 
+    // ================= v0.9.0 CCLEANER-GRADE CLICK V2 =================
+    // CCleaner processNodeClick ka core principle: click "successful" tabhi
+    // jab uska EFFECT dikh jaye. Tick-driven port: click → 700ms → FRESH tree
+    // par effect verify → miss par FRESH re-find + re-tap → 900ms → final
+    // verify. Confirm chalne tak naya tick-click KEY_CONFIRM_AT gate se band.
+
+    private interface NodeFinder {
+        AccessibilityNodeInfo find();
+    }
+
+    private interface ScreenCheck {
+        boolean ok();
+    }
+
+    private void clickAndConfirm(NodeFinder finder, ScreenCheck verify, Runnable onConfirmed) {
+        AccessibilityNodeInfo node = finder.find();
+        if (node == null || !clickNodeOrParent(node)) return;
+        handler.postDelayed(() -> {
+            try {
+                if (verify.ok()) {
+                    onConfirmed.run();
+                    return;
+                }
+            } catch (Exception ignored) {
+            }
+            AccessibilityNodeInfo again = finder.find();
+            if (again == null || !clickNodeOrParent(again)) return;
+            handler.postDelayed(() -> {
+                try {
+                    if (verify.ok()) onConfirmed.run();
+                } catch (Exception ignored) {
+                }
+            }, 900);
+        }, 700);
+    }
+
+    /** v0.9.0: SET_TEXT effect-verify — Litho composer ka "true" return
+     * evidence nahi; FRESH field par asli content check (letter-core
+     * contains). Attempt 2 = focus + re-set. */
+    private void verifyFill(SharedPreferences p, int attempt) {
+        if (!CampaignStore.STAGE_FILL_COMPOSER.equals(p.getString(CampaignStore.KEY_STAGE, ""))) return;
+        AccessibilityNodeInfo r = getRootInActiveWindow();
+        AccessibilityNodeInfo field = r == null ? null : findEditable(r);
+        String want = ccNormalize(CampaignStore.postText(this));
+        String got = field == null ? ""
+                : ccNormalize(firstNonEmpty(field.getText(), field.getContentDescription()));
+        boolean filled = field != null && (want.isEmpty() || got.contains(want));
+        if (filled) {
+            setStage(p, CampaignStore.STAGE_PRESS_POST);
+            toast(p.getBoolean(CampaignStore.KEY_AUTO_POST, false)
+                    ? "Message ready — posting…"
+                    : "Message ready — press Post manually");
+            if (p.getBoolean(CampaignStore.KEY_AUTO_POST, false)) scheduleProcess(1200);
+            return;
+        }
+        if (attempt < 2 && field != null) {
+            field.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+            Bundle args = new Bundle();
+            args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                    CampaignStore.postText(this));
+            field.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+            handler.postDelayed(() -> verifyFill(p, attempt + 1), 650);
+        }
+        // attempt 2 fail → stage FILL par hi; agla event-tick dobara koshish.
+    }
+
+    /** v0.9.0: Post click ka effect-verify — composer band = Post button
+     * GONE ya disabled. "Posting…" state me wait (button dead), advance sirf
+     * pukhta submit par — double-post ka risk nahi. */
+    private void confirmPost(SharedPreferences p, int attempt) {
+        if (!CampaignStore.STAGE_PRESS_POST.equals(p.getString(CampaignStore.KEY_STAGE, ""))) return;
+        if (!p.getBoolean(CampaignStore.KEY_AUTO_POST, false)) return;
+        AccessibilityNodeInfo r = getRootInActiveWindow();
+        AccessibilityNodeInfo postBtn = r == null ? null : findByLabels(r, POST_LABELS, true);
+        if (postBtn == null || !postBtn.isClickable()) {
+            setStage(p, CampaignStore.STAGE_WAIT_NEXT);
+            int delaySeconds = p.getInt(CampaignStore.KEY_DELAY, 15);
+            toast("Posted. Next group in " + delaySeconds + " seconds");
+            handler.postDelayed(this::advanceToNextGroup, delaySeconds * 1000L);
+            return;
+        }
+        if (attempt < 2) {
+            if (r != null && isVisibleOnScreen(r, postBtn)) clickNodeOrParent(postBtn);
+            p.edit().putLong(CampaignStore.KEY_CONFIRM_AT, System.currentTimeMillis()).apply();
+            handler.postDelayed(() -> confirmPost(p, attempt + 1), 1200);
+        }
+    }
+
     private String safeLabel(AccessibilityNodeInfo node) {
         CharSequence t = node.getText();
         CharSequence d = node.getContentDescription();
@@ -1543,6 +1766,19 @@ public class PosterAccessibilityService extends AccessibilityService {
         if (root != null) root.getBoundsInScreen(clip);
         AccessibilityNodeInfo cur = node;
         for (int i = 0; cur != null && i <= hops; i++) {
+            // v0.9.0 CCleaner snapshot-hygiene: bounds read se PEHLE refresh —
+            // FB transition frames purane bounds rakhte hain (stale tap).
+            try {
+                cur.refresh();
+            } catch (Exception ignored) {
+            }
+            try {
+                if (!cur.isVisibleToUser()) {
+                    cur = cur.getParent();
+                    continue;
+                }
+            } catch (Exception ignored) {
+            }
             android.graphics.Rect r = new android.graphics.Rect();
             cur.getBoundsInScreen(r);
             if (!clip.isEmpty() && !android.graphics.Rect.intersects(clip, r)) {
@@ -1563,6 +1799,12 @@ public class PosterAccessibilityService extends AccessibilityService {
      */
     private boolean dispatchTap(int x, int y, int durationMs) {
         lastTapPoint = "tap@(" + x + "," + y + ")";
+        // v0.9.0: gesture busy ho to naya dispatch nahi — overlap system
+        // pehle gesture ko CANCEL karwata hai (dono taps mar jate hain).
+        if (gestureBusy) {
+            lastGestureResult = "tap skipped: gesture busy";
+            return false;
+        }
         android.graphics.Path pt = new android.graphics.Path();
         pt.moveTo(x, y);
         pt.lineTo(x, y);
@@ -1570,16 +1812,29 @@ public class PosterAccessibilityService extends AccessibilityService {
                 .addStroke(new GestureDescription.StrokeDescription(pt, 0, durationMs))
                 .build();
         final Handler h = new Handler(Looper.getMainLooper());
-        // v0.6.0: the boolean return of dispatchGesture only means the system
-        // QUEUED the gesture — completion/cancellation arrives via callback
-        // and is recorded so the in-app card can show whether real taps
-        // actually land on this ROM (accepted-but-cancelled was invisible).
+        // v0.9.0 CCleaner click-ladder port (processNodeClick): success =
+        // onCompleted ONLY. dispatchGesture ka boolean sirf QUEUE hai —
+        // purana engine queue-accept ko click "OK" likh deta tha, is liye
+        // cancelled taps bhi stage advance karwa dete the ("useless clicks").
+        // Ab CountDownLatch 450ms: onCompleted hi true, cancel/reject false.
+        final CountDownLatch latch = new CountDownLatch(1);
+        final boolean[] completed = {false};
+        gestureBusy = true;
         GestureResultCallback cb = new GestureResultCallback() {
+            private void finish(boolean ok) {
+                gestureBusy = false;
+                if (ok) {
+                    lastGestureAt = System.currentTimeMillis();
+                    lastGestureResult = "tap completed";
+                    tapFailStreak = 0;
+                }
+                completed[0] = ok;
+                latch.countDown();
+            }
+
             @Override
             public void onCompleted(GestureDescription g) {
-                lastGestureAt = System.currentTimeMillis();
-                lastGestureResult = "tap completed";
-                tapFailStreak = 0;
+                finish(true);
             }
 
             @Override
@@ -1588,9 +1843,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                 h.postDelayed(() -> dispatchGesture(g, new GestureResultCallback() {
                     @Override
                     public void onCompleted(GestureDescription g2) {
-                        lastGestureAt = System.currentTimeMillis();
-                        lastGestureResult = "tap completed";
-                        tapFailStreak = 0;
+                        finish(true);
                     }
 
                     @Override
@@ -1598,17 +1851,24 @@ public class PosterAccessibilityService extends AccessibilityService {
                         lastGestureResult = "tap CANCELLED twice";
                         tapFailStreak++;
                         if (tapFailStreak >= 3) gestureBroken = true;
+                        finish(false);
                     }
                 }, h), 300);
             }
         };
         boolean accepted = dispatchGesture(gesture, cb, h);
         if (!accepted) {
+            gestureBusy = false;
             lastGestureResult = "tap REJECTED by system";
             tapFailStreak++;
             if (tapFailStreak >= 3) gestureBroken = true;
+            return false;
         }
-        return accepted;
+        try {
+            latch.await(450, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ignored) {
+        }
+        return completed[0];
     }
 
     private boolean matchesPostLabel(AccessibilityEvent event) {

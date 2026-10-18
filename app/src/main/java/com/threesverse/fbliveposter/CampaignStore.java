@@ -40,6 +40,7 @@ final class CampaignStore {
     static final String KEY_WEBJUMP_AT = "webjump_at";         // v0.7.1: last deep-link jump time (rate-limit direct Groups-screen jumps)
     static final String KEY_YGTAB_AT = "yg_tab_at";            // v0.7.1: "Your groups" tab click done for the current FIND_GROUP stage (0 = not yet)
     static final String KEY_MEDIA_URIS = "media_uris_json";   // v0.8.0: ["content://..."] photos/videos attached to every post
+    static final String KEY_CONFIRM_AT = "confirm_at";        // v0.9.0: click-verify window — confirm chalte waqt naya tick-click block
 
     static final String STAGE_OPEN_GROUP = "open_group";
     static final String STAGE_NAV_GROUPS = "nav_groups";    // find + tap the Groups entry inside Facebook
