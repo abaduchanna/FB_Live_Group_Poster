@@ -264,12 +264,26 @@ public class MainActivity extends Activity {
         SharedPreferences p = CampaignStore.prefs(this);
         linkInput.setText(p.getString(CampaignStore.KEY_LINK, ""));
         messageInput.setText(""); // message is always empty by default
-        delayInput.setText(String.valueOf(p.getInt(CampaignStore.KEY_DELAY, 90)));
+        // v0.7.5: delay default 90 → 15 (owner: "30 sec wait ko reduce kar 10-15
+        // sec kar de") + one-time 30 → 15 migration of the saved value.
+        int savedDelay = p.getInt(CampaignStore.KEY_DELAY, 15);
+        if (savedDelay == 30) {
+            savedDelay = 15;
+            p.edit().putInt(CampaignStore.KEY_DELAY, 15).apply();
+            Toast.makeText(this, "Delay 30s se 15s kar diya — ab groups 15 sec me post honge", Toast.LENGTH_LONG).show();
+        }
+        delayInput.setText(String.valueOf(savedDelay));
         autoPostInput.setChecked(p.getBoolean(CampaignStore.KEY_AUTO_POST, false));
         String savedPackage = p.getString(CampaignStore.KEY_FACEBOOK_PACKAGE, "");
         if (!savedPackage.isEmpty()) {
             facebookAppStatus.setText("Saved Facebook app: " + facebookLabel(savedPackage)
                     + " — confirm or change it when you start");
+        }
+        // v0.7.5: visible proof that the saved selection was restored (selection
+        // itself is written through on every toggle — nothing to re-save).
+        int restored = CampaignStore.selectedTargets(this).size();
+        if (restored > 0) {
+            Toast.makeText(this, restored + " groups ki pichli selection restore ho gayi — dobara select karne ki zaroorat nahi", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -732,8 +746,8 @@ public class MainActivity extends Activity {
             Toast.makeText(this, "Import groups first and select at least one", Toast.LENGTH_LONG).show();
             return;
         }
-        if (delay < 45) {
-            delayInput.setError("Use at least 45 seconds");
+        if (delay < 10) {
+            delayInput.setError("Use at least 10 seconds");
             return;
         }
 

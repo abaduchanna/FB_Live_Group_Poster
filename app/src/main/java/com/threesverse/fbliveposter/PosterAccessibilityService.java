@@ -181,7 +181,7 @@ public class PosterAccessibilityService extends AccessibilityService {
                 && event.getEventType() == AccessibilityEvent.TYPE_VIEW_CLICKED
                 && matchesPostLabel(event)) {
             setStage(p, CampaignStore.STAGE_WAIT_NEXT);
-            int delaySeconds = p.getInt(CampaignStore.KEY_DELAY, 90);
+            int delaySeconds = p.getInt(CampaignStore.KEY_DELAY, 15);
             toast("Post detected. Next group in " + delaySeconds + " seconds");
             handler.postDelayed(this::advanceToNextGroup, delaySeconds * 1000L);
             return;
@@ -694,7 +694,7 @@ public class PosterAccessibilityService extends AccessibilityService {
             AccessibilityNodeInfo post = findByLabels(root, POST_LABELS, true);
             if (post != null && clickNodeOrParent(post)) {
                 setStage(p, CampaignStore.STAGE_WAIT_NEXT);
-                int delaySeconds = p.getInt(CampaignStore.KEY_DELAY, 90);
+                int delaySeconds = p.getInt(CampaignStore.KEY_DELAY, 15);
                 toast("Posted. Next group in " + delaySeconds + " seconds");
                 handler.postDelayed(this::advanceToNextGroup, delaySeconds * 1000L);
             } else {

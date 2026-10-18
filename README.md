@@ -6,7 +6,10 @@ An open-source Android proof of concept that shares a Facebook Live link to a us
 
 > **Important:** Meta removed the Facebook Groups API and `publish_to_groups` on April 22, 2024. This project therefore uses Android Accessibility to assist with the visible Facebook UI. It is not an official Facebook integration, selectors can break when Facebook changes its app, and use may be restricted by Facebook or individual group rules.
 
-## What works in v0.7.4
+## What works in v0.7.5
+
+- **Multi-file attach in the Web Poster** (v0.7.5) — tapping **Photo/video** in the m.facebook.com composer now opens the system file picker with **multiple selection** for photos and videos (previously it did nothing or fell back to a single-file picker). Pick as many files as you like and Facebook uploads them all with your post.
+- **Faster posting: delay minimum 45s → 10s** (v0.7.5) — set any delay from 10 seconds up. Default for new installs is 15s, and a saved 30s delay auto-migrates to 15s on first launch of this version. Web Poster honors the same 10s minimum.
 
 - **Direct jump to Groups** — v0.7.1+ opens the Facebook app and jumps straight to the Groups screen (app link); the old drawer/coordinate walk stays as a fallback. Web Poster engine: **m.facebook.com DOM automation** in a WebView (with DOM-snapshot diagnostics) as a second route.
 - **CCleaner-grade accessibility engine** (v0.7.3) — normalized letter-core label matching, focus-then-click tiers, stale-click freshness duplicate-guard, and tap strokes timed by `ViewConfiguration` so taps register reliably.
@@ -21,7 +24,8 @@ Plus everything from earlier versions:
 - The message box starts **empty** — leave it empty to post just the live link.
 - Paste a live link, or share a Facebook link to the app from another phone/app.
 - Fill the message plus the live link in each group's composer.
-- Default safer mode leaves the final **Post** tap to the user; optional experimental mode taps **Post** automatically and waits at least 45 seconds before the next group.
+- Default safer mode leaves the final **Post** tap to the user; optional experimental mode taps **Post** automatically and waits at least 10 seconds before the next group.
+- **Selection memory** — every checkbox toggle is written straight to storage, so your group selection survives app restarts (an explicit **Save selection** button re-writes it and confirms the count, and v0.7.5 shows a restore confirmation toast on startup).
 - Facebook-blue light and dark themes with an in-app switch.
 - All configuration stays on the phone; no Facebook password, cookie, or token is collected.
 

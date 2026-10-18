@@ -1,12 +1,17 @@
 package com.threesverse.fbliveposter;
 
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.Intent;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.webkit.CookieManager;
+import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
+import android.webkit.ValueCallback;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.Button;
@@ -60,6 +65,10 @@ public class WebPosterActivity extends Activity {
     private int idx = 0;
     private List<JSONObject> targets = new ArrayList<>();
     private boolean loadPending = false;
+
+    /** v0.7.5: pending WebView file chooser (FB composer Photo/video button). */
+    private ValueCallback<Uri[]> fileCallback;
+    private static final int FILE_CHOOSER_REQ = 4101;
 
     /** Master kill-switch for the loop, also flipped by MainActivity Stop. */
     volatile static boolean webActive = false;
@@ -121,6 +130,35 @@ public class WebPosterActivity extends Activity {
                 ui.postDelayed(WebPosterActivity.this::step, PAGE_SETTLE_MS);
             }
         });
+        // v0.7.5: file chooser with MULTI-SELECT (owner: "just single file select
+        // karta hai"). Without this, FB's composer Photo/video button either did
+        // nothing or fell back to a legacy single-file picker on some WebViews.
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView wv, ValueCallback<Uri[]> callback,
+                                             FileChooserParams params) {
+                if (fileCallback != null) {
+                    fileCallback.onReceiveValue(null); // drop a stale callback
+                }
+                fileCallback = callback;
+                try {
+                    Intent pick = new Intent(Intent.ACTION_GET_CONTENT);
+                    pick.addCategory(Intent.CATEGORY_OPENABLE);
+                    pick.setType("image/*");
+                    pick.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                    pick.putExtra(Intent.EXTRA_MIME_TYPES,
+                            new String[]{"image/*", "video/*"});
+                    startActivityForResult(
+                            Intent.createChooser(pick, "Select photos/videos (multiple allowed)"),
+                            FILE_CHOOSER_REQ);
+                } catch (Exception broken) {
+                    fileCallback = null;
+                    status("File picker failed: " + broken.getMessage());
+                    return false;
+                }
+                return true;
+            }
+        });
         root.addView(web, new LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
@@ -149,6 +187,33 @@ public class WebPosterActivity extends Activity {
     private void status(String msg) {
         statusLine.setText(msg);
         webStatus = msg;
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode != FILE_CHOOSER_REQ) return;
+        ValueCallback<Uri[]> cb = fileCallback;
+        fileCallback = null;
+        if (cb == null) return;
+        List<Uri> uris = new ArrayList<>();
+        try {
+            if (resultCode == RESULT_OK && data != null) {
+                ClipData clip = data.getClipData();
+                if (clip != null) {
+                    for (int i = 0; i < clip.getItemCount(); i++) {
+                        Uri u = clip.getItemAt(i).getUri();
+                        if (u != null) uris.add(u);
+                    }
+                } else if (data.getData() != null) {
+                    uris.add(data.getData());
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        cb.onReceiveValue(uris.toArray(new Uri[0]));
+        if (!uris.isEmpty()) {
+            status(uris.size() + " file(s) selected — FB upload shuru karega.");
+        }
     }
 
     @Override
@@ -320,8 +385,11 @@ public class WebPosterActivity extends Activity {
                 eval(JS_POST, r -> {
                     String res = field(r, "r");
                     if ("clicked".equals(res)) {
-                        long delay = Math.max(45, CampaignStore.prefs(this)
-                                .getInt(CampaignStore.KEY_DELAY, 90));
+                        // v0.7.5: safety delay min 45s → 10s (owner: "30 sec wait
+                        // time ko reduce kar 10-15 sec kar de"). Saved value used
+                        // as-is (15s default for new installs).
+                        long delay = Math.max(10, CampaignStore.prefs(this)
+                                .getInt(CampaignStore.KEY_DELAY, 15));
                         status("Posted in group " + (idx + 1) + "/" + targets.size()
                                 + ". Next in " + delay + "s…");
                         idx++;
