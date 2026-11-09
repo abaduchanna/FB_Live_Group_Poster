@@ -58,10 +58,7 @@ Android and Facebook may pause or stop a live stream when Facebook is sent to th
 
 ## Install and test
 
-1. Download the normal APK from the latest GitHub Release. If Android says
-   **App not installed** because an older/debug build has a conflicting
-   signature, use the `FreshInstall` APK; it has a separate package name and
-   can install alongside the old build.
+1. Download `FB_Live_Group_Poster-v0.9.0.apk` from the latest GitHub Release (v0.9.0). If Android says **App not installed**, uninstall the older build first. (The FreshInstall variant was removed in v0.7.4.)
 2. Install the APK on Android 8.0 or newer.
 3. Sign in to the Facebook app you want to post from — official, Lite or your clone.
 4. Open FB Live Group Poster and enable its Accessibility service.
